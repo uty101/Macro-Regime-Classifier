@@ -1,0 +1,29 @@
+[project]
+name = "regime"
+version = "0.0.0"
+description = "Macro regime classifier and factor timing (quant project 2 of the home-built series)"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pandas==2.2.*",
+    "numpy==1.26.*",
+    "pyarrow",
+    "fredapi==0.5.*",
+    "hmmlearn==0.3.*",
+    "scikit-learn==1.5.*",
+    "statsmodels",
+    "arch==7.*",
+    "scipy",
+    "matplotlib",
+    "pytest",
+    "requests",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["regime*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

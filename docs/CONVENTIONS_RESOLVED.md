@@ -1,0 +1,16 @@
+# Conventions resolved
+
+These are fixed. A session that finds one of them unworkable records the problem in `decisions/OPEN.md` with two concrete options; it does not change the convention.
+
+1. **Timing convention.** Decision date t is the last calendar day of month t. Market series: the last non-missing daily observation dated on or before t, looking back at most 10 calendar days, else NaN. Revised series: the ALFRED vintage as of t (for each observation month, the release with the greatest `realtime_start` ≤ t). Factor returns: months ≤ t. The decision at t earns month t+1 (lag 0) or t+2 (lag 1).
+2. **First-window standardisation is in-sample by construction.** For decision dates 1991-01-31 to `first_window_end` (2004-12-31), z uses the mean and standard deviation of that whole window. The first HMM fit uses exactly that window, so this adds no lookahead relative to the fit. From 2005-01-31 onward the mean and standard deviation at t use all decision dates from 1991-01-31 to t inclusive.
+3. **The z matrix is computed once and never recomputed at refit.** `data/processed/features_z.parquet` is written once by `regime.features.standardise`; every fit, filter and smooth reads the same real-time z rows.
+4. **Refit parameters apply from the refit date inclusive.** Parameters fitted at refit date D are in force for decision dates D ≤ t < next refit date, because the fit at D used only data ≤ D.
+5. **Filtered probability comes from a fresh full-history forward pass per t.** For each decision date t, `forward_filter` runs on the z sequence from 1991-01-31 to t under the parameters in force at t, and the last row is taken. No filtered state is carried across a refit boundary.
+6. **hmmlearn `predict_proba` is smoothed.** Only its final row, where filtered and smoothed coincide, is used to validate `forward_filter`. Earlier rows are never compared to the filter and never used as filtered probabilities.
+7. **Project 1 series are optional.** `load_project1()` returns an empty frame with columns (date, factor, ret) and logs `project1: absent` when `data/external/project1_factors.parquet` is missing. Nothing may depend on it being present.
+8. **Mkt-RF is excluded from allocation.** The allocation universe is {SMB, HML, RMW, CMA, UMD}; Mkt-RF appears only in conditional statistics.
+9. **Sleeve-internal turnover is not modelled.** Costs cover only the turnover of the sleeve weights, c × ½ Σ|Δw|. The internal turnover of each Fama-French factor is identical across static and timed and is stated in the README.
+10. **Sample end is bound by French data.** `sample.end` is the last month present in the French momentum file of the first recorded pull (`french.pull_id` in config). French data lags 1 to 2 months; this is the binding constraint.
+11. **Lags are decision-date rows, not calendar days.** "12 months ago" is 12 rows earlier in the decision-date index. For revised series, "m−3" and "m−12" are observation months within the vintage, likewise counted in rows of that vintage's observation-month index.
+12. **All lags of a revised series come from the same as-of vintage.** At decision date t, CPI_m and CPI_{m−3} (and INDPRO_m, INDPRO_{m−12}; UNRATE_m, UNRATE_{m−12}) are read from the single vintage as of t, never from the latest vintage and never from a mix of vintages.

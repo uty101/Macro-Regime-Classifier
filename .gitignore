@@ -1,0 +1,9 @@
+# data is parquet/csv only and never committed; the folder skeleton is kept via .gitkeep
+data/**
+!data/**/
+!data/**/.gitkeep
+.env
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/

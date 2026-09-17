@@ -1,0 +1,113 @@
+# config.toml — every parameter of the Macro Regime Classifier.
+#
+# Nothing under regime/ hard-codes a value that appears here. The Config
+# dataclass (regime/config.py) has one field per key, named <table>_<key>
+# (e.g. hmm.n_iter -> Config.hmm_n_iter); tests/test_config.py asserts the two
+# sets are identical. TOML arrays become tuples. Dates are ISO strings
+# "YYYY-MM-DD" and are always month-end decision dates.
+#
+# Empty strings are placeholders that the named step fills in and commits;
+# once filled they are never changed (they pin the data snapshot every run uses).
+
+[run]
+seed = 20260917                   # base seed; per-restart seeds are seed + restart_index; bootstrap seed is seed
+
+[sample]
+start = "1990-01-31"              # first decision date in the as-of panel
+end = ""                          # last decision date = last month in the French momentum file of french.pull_id; filled at step 1.5
+features_from = "1991-01-31"      # first decision date with valid 12-row changes; first z row; first row of every fit and forward pass
+first_window_end = "2004-12-31"   # end of the first (in-sample) standardisation window; first refit date; first out-of-sample decision date
+robustness_from = "2004-01-31"    # first decision date of the 10-feature robustness run (breakeven_chg12 is valid from here)
+
+[fred]
+api_key_env = "FRED_API_KEY"      # environment variable read at FredClient construction; RuntimeError("FRED_API_KEY not set") if missing
+market_series = ["DGS10", "DGS2", "DTWEXBGS", "DTWEXM", "DCOILWTICO", "VIXCLS", "T10YIE"]
+vintage_series = ["CPIAUCSL", "INDPRO", "UNRATE"]
+lookback_days = 10                # market value at t = last non-missing observation with t - lookback_days <= date <= t
+raw_dir = "data/raw"
+manifest = "data/raw/manifest.csv"
+market_pull_id = ""               # pull session used for the market series; filled at step 1.3
+vintage_pull_id = ""              # pull session used for the ALFRED vintages; filled at step 1.4
+
+[french]
+factors_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_CSV.zip"
+momentum_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_CSV.zip"
+columns = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "UMD", "RF"]
+pull_id = ""                      # first snapshot; filled at step 1.5; the strategy always uses this snapshot
+
+[features]
+core = ["dgs10_level", "dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]
+robustness = ["unrate_chg12", "breakeven_chg12"]
+change_lag = 12                   # rows of the decision-date index (market series) or of the vintage's observation-month index (INDPRO, UNRATE)
+cpi_lag = 3                       # observation months between CPI_m and CPI_{m-3}; annualisation power is 12 / cpi_lag
+dollar_splice_date = "2006-12-31" # dollar_chg12 from DTWEXM before this decision date, from DTWEXBGS from it onward
+ddof = 1                          # standard deviation denominator for standardisation and for every Sharpe ratio
+
+[hmm]
+covariance_type = "full"
+n_iter = 500
+tol = 1e-4
+init_params = "stmc"
+params = "stmc"
+n_restarts = 20                   # restart i uses random_state = run.seed + i
+k_grid = [2, 3, 4, 5]             # K values fitted on the first window for bic_by_k.csv
+k_candidates = [3, 4]             # primary_K = argmin BIC over these
+refit_month = 12                  # refit dates are first_window_end and every 31 December after it up to sample.end
+min_state_rows = 12               # a state with fewer training rows (argmax of predict_proba) is reported as degenerate
+assigned_threshold = 0.5          # assigned = max filtered probability > this
+anchor_feature = "dgs10_chg12"    # states ordered by ascending state mean of this feature
+anchor_tiebreak_feature = "cpi_3m_ann"
+anchor_tie_tolerance = 0.1        # adjacent anchor-feature means within this (z-units) are ordered by the tiebreak feature
+
+[gmm]
+covariance_type = "full"
+n_init = 1
+max_iter = 500
+tol = 1e-4
+n_restarts = 20                   # restart i uses random_state = run.seed + i; kept by highest lower bound
+
+[rules]
+growth_feature = "indpro_chg12"   # growth up = feature > expanding median (first-window rule as standardisation)
+inflation_feature = "cpi_3m_ann"  # inflation up = feature > expanding median
+
+[bootstrap]
+block_size = 6                    # StationaryBootstrap expected block length, months
+n_replications = 2000
+p_low = 0.05                      # lower percentile reported
+p_high = 0.95                     # upper percentile reported
+block_size_grid = [3, 6, 12]      # section 6.5, headline cell only
+
+[strategy]
+factors = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "UMD"]   # conditional statistics are computed for all of these
+universe = ["SMB", "HML", "RMW", "CMA", "UMD"]            # allocation universe A; static weight is 1/len(universe)
+min_regime_obs = 24               # n_k(t) below this -> fallback to static weights
+min_regime_obs_grid = [12, 24, 36]
+eta_grid = [0.25, 0.5, 1.0]
+lag_grid = [0, 1]                 # lag 0: w_t earns month t+1; lag 1: w_t earns month t+2
+cost_bp_grid = [10, 20, 50]
+headline_eta = 0.5
+headline_lag = 1
+headline_cost_bp = 20
+headline_source = "hmm_filtered"
+label_sources = ["hmm_filtered", "hmm_smoothed", "gmm_filtered", "rules"]
+
+[outputs]
+interim_dir = "data/interim"
+processed_dir = "data/processed"
+external_dir = "data/external"
+tables_dir = "outputs/tables"
+charts_dir = "outputs/charts"
+regimes_dir = "outputs/regimes"
+chart_dpi = 300
+asof_panel = "data/processed/asof_panel.parquet"
+features_raw = "data/processed/features_raw.parquet"
+features_z = "data/processed/features_z.parquet"
+dropped_rows = "data/processed/dropped_rows.csv"
+primary_k = "data/processed/primary_k.txt"
+project1_file = "data/external/project1_factors.parquet"
+filtered_probs = "outputs/regimes/filtered_probs.csv"
+smoothed_probs = "outputs/regimes/smoothed_probs.csv"
+gmm_filtered_probs = "outputs/regimes/gmm_filtered_probs.csv"
+regime_labels = "outputs/regimes/regime_labels.csv"
+timing_results = "outputs/tables/timing_results.csv"
+runtime_log = "outputs/tables/runtime.csv"
