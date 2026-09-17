@@ -6,6 +6,8 @@ Regimes condition monthly Fama-French factor returns, with stationary-block-boot
 The write-up answers four questions: how many persistent states there are, whether factor premia differ by regime beyond bootstrap noise, whether timing beats static equal weight net of lag and costs, and how much of the benefit disappears going from smoothed to filtered regimes.
 Everything runs from `python -m regime.run` and `pytest`; the plan is in `PLAN.md`, the conventions in `CLAUDE.md` and `docs/CONVENTIONS_RESOLVED.md`.
 
+Data from FRED and ALFRED (Federal Reserve Bank of St. Louis) and the Kenneth R. French Data Library, redistributed unmodified under their terms.
+
 ## Results
 
 Results pending.

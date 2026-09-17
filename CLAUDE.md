@@ -1,6 +1,6 @@
 # CLAUDE.md — Macro Regime Classifier and Factor Timing
 
-Sections 0 and 3 of `REGIME_KICKOFF_v2.md`, verbatim. The full build plan is `PLAN.md`; every parameter is in `config.toml`; resolved conventions are in `docs/CONVENTIONS_RESOLVED.md`.
+Sections 0 and 3 of `REGIME_KICKOFF_v2.md`, verbatim except rule 10, which carries the session 0 review revision (60-minute threshold for the long steps). The full build plan is `PLAN.md`; every parameter is in `config.toml`; resolved conventions are in `docs/CONVENTIONS_RESOLVED.md`.
 
 ## 0. How this repo is run
 
@@ -17,7 +17,7 @@ Rules that hold for every session:
 7. No lookahead. The rule is in section 3 and enforced by tests. Any code path that uses a value dated after the decision date is a bug, regardless of how small the effect.
 8. No library other than those in `pyproject.toml`. If you believe one is needed, it is an `OPEN.md` item.
 9. No notebooks. Everything runs from `python -m regime.run` and `pytest`.
-10. If the runtime of a step exceeds 20 minutes on your machine, stop and report the timing in the review file rather than reducing restarts, replications or the grid.
+10. If the runtime of a step exceeds 20 minutes on your machine (60 minutes for steps 3.4, 3.5, 3.6, 6.1, 6.2 and 6.3; `run.step_timeout_minutes`, `run.long_step_timeout_minutes` and `run.long_steps` in config), stop and report the timing in the review file rather than reducing restarts, replications or the grid.
 
 ## 3. Timing convention
 

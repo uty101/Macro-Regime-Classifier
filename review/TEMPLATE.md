@@ -42,7 +42,7 @@ $ pytest -q
 |---|---|---|---|
 | X.1 | m:ss | | |
 
-Any step over 20 minutes is reported here and was not worked around by reducing restarts, replications or the grid (rule 10).
+Any step over its threshold — 20 minutes, or 60 minutes for steps 3.4, 3.5, 3.6, 6.1, 6.2 and 6.3 (`run.step_timeout_minutes`, `run.long_step_timeout_minutes`, `run.long_steps`) — is reported here and was not worked around by reducing restarts, replications or the grid (rule 10).
 
 ## Not verified
 

@@ -1,6 +1,8 @@
-# data is parquet/csv only and never committed; the folder skeleton is kept via .gitkeep
-data/**
-!data/**/
+# data/raw/ (pinned raw snapshots, zips and manifest.csv) is committed in full;
+# interim, processed and external are always regenerated and never committed
+data/interim/**
+data/processed/**
+data/external/**
 !data/**/.gitkeep
 .env
 __pycache__/
