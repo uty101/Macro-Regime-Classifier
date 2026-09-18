@@ -17,7 +17,7 @@ long_steps = ["3.4", "3.5", "3.6", "6.1", "6.2", "6.3"]
 
 [sample]
 start = "1990-01-31"              # first decision date in the as-of panel
-end = ""                          # last decision date = last month in the French momentum file of french.pull_id; filled at step 1.5
+end = "2026-07-31"                # last decision date = last month in the French momentum file of french.pull_id; filled at step 1.5
 features_from = "1991-01-31"      # first decision date with valid 12-row changes; first z row; first row of every fit and forward pass
 first_window_end = "2004-12-31"   # end of the first (in-sample) standardisation window; first refit date; first out-of-sample decision date
 robustness_from = "2004-01-31"    # first decision date of the 10-feature robustness run (breakeven_chg12 is valid from here)
@@ -36,7 +36,7 @@ vintage_pull_id = ""              # pull session used for the ALFRED vintages; f
 factors_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_CSV.zip"
 momentum_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Momentum_Factor_CSV.zip"
 columns = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "UMD", "RF"]
-pull_id = ""                      # first snapshot; filled at step 1.5; the strategy always uses this snapshot
+pull_id = "20260918T083009Z"      # first snapshot; filled at step 1.5; the strategy always uses this snapshot
 
 [features]
 core = ["dgs10_level", "dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]

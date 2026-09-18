@@ -1,6 +1,7 @@
 """Step 1.1: config.toml and Config are the same set of keys, and Config is frozen and typed."""
 
 import dataclasses
+import re
 import tomllib
 from pathlib import Path
 
@@ -58,3 +59,7 @@ def test_config_is_frozen_and_typed() -> None:
     assert pull_id_fields == ["fred_market_pull_id", "fred_vintage_pull_id", "french_pull_id"]
     for name in pull_id_fields + ["sample_end"]:
         assert isinstance(getattr(cfg, name), str), name
+    # Filled at step 1.5 (French pull 20260918T083009Z, momentum file ends 2026-07):
+    assert re.fullmatch(r"\d{8}T\d{6}Z", cfg.french_pull_id), cfg.french_pull_id
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", cfg.sample_end), cfg.sample_end
+    assert cfg.sample_end != ""
