@@ -48,6 +48,7 @@ class Config:
 
     # [features]
     features_core: tuple
+    features_core_no_level: tuple
     features_robustness: tuple
     features_change_lag: int
     features_cpi_lag: int
@@ -58,6 +59,7 @@ class Config:
     hmm_covariance_type: str
     hmm_n_iter: int
     hmm_tol: float
+    hmm_min_covar: float
     hmm_init_params: str
     hmm_params: str
     hmm_n_restarts: int
@@ -77,6 +79,7 @@ class Config:
     gmm_n_init: int
     gmm_max_iter: int
     gmm_tol: float
+    gmm_reg_covar: float
     gmm_n_restarts: int
 
     # [rules]

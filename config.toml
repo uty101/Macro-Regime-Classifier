@@ -13,7 +13,7 @@
 seed = 20260917                   # base seed; per-restart seeds are seed + restart_index; bootstrap seed is seed
 step_timeout_minutes = 20         # a step over this wall-clock is stopped and reported, never worked around (rule 10)
 long_step_timeout_minutes = 60    # threshold for the steps listed in long_steps
-long_steps = ["3.4", "3.5", "3.6", "6.1", "6.2", "6.3"]
+long_steps = ["3.4", "3.5", "3.6", "6.1", "6.2", "6.3", "6.6"]
 
 [sample]
 start = "1990-01-31"              # first decision date in the as-of panel
@@ -40,6 +40,7 @@ pull_id = "20260918T083009Z"      # first snapshot; filled at step 1.5; the stra
 
 [features]
 core = ["dgs10_level", "dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]
+core_no_level = ["dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]  # step 6.6: core without dgs10_level (convention 15)
 robustness = ["unrate_chg12", "breakeven_chg12"]
 change_lag = 12                   # rows of the decision-date index (market series) or of the vintage's observation-month index (INDPRO, UNRATE)
 cpi_lag = 3                       # observation months between CPI_m and CPI_{m-3}; annualisation power is 12 / cpi_lag
@@ -50,6 +51,7 @@ ddof = 1                          # standard deviation denominator for standardi
 covariance_type = "full"
 n_iter = 500
 tol = 1e-4
+min_covar = 1e-3                  # hmmlearn GaussianHMM default, pinned so a library change cannot move a fit
 init_params = "stmc"
 params = "stmc"
 n_restarts = 20                   # restart i uses random_state = run.seed + i
@@ -69,6 +71,7 @@ covariance_type = "full"
 n_init = 1
 max_iter = 500
 tol = 1e-4
+reg_covar = 1e-6                  # sklearn GaussianMixture default, pinned so a library change cannot move a fit
 n_restarts = 20                   # restart i uses random_state = run.seed + i; kept by highest lower bound
 
 [rules]
