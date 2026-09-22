@@ -56,6 +56,25 @@ class FredClient:
         write_raw(frame, "fred", series_id, self.pull_id, self.cfg)
         return self.pull_id
 
+    def pull_vintages(self, series_id: str) -> str:
+        """Every release of every observation of a revised series (ALFRED), stored raw; returns the session pull_id.
+
+        ``date`` is the observation month as FRED reports it (month start),
+        ``realtime_start`` the release date. Rows are stored as returned; the
+        as-of logic lives in ``regime.data.alfred``.
+        """
+        raw = self.fred.get_series_all_releases(series_id)
+        frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(raw["date"]),
+                "realtime_start": pd.to_datetime(raw["realtime_start"]),
+                "value": pd.to_numeric(raw["value"], errors="coerce").astype("float64"),
+                "pulled_at": self.pulled_at.isoformat(),
+            }
+        ).sort_values(["date", "realtime_start"]).reset_index(drop=True)
+        write_raw(frame, "alfred", series_id, self.pull_id, self.cfg)
+        return self.pull_id
+
 
 def raw_path(source: str, series: str, pull_id: str, cfg: Config) -> Path:
     """``data/raw/<source>/<series>_<pull_id>.parquet``."""

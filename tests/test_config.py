@@ -65,3 +65,5 @@ def test_config_is_frozen_and_typed() -> None:
     assert cfg.sample_end != ""
     # Filled at step 1.3 (market pull 20260922T004835Z):
     assert re.fullmatch(r"\d{8}T\d{6}Z", cfg.fred_market_pull_id), cfg.fred_market_pull_id
+    # Filled at step 1.4 (vintage pull 20260922T005041Z):
+    assert re.fullmatch(r"\d{8}T\d{6}Z", cfg.fred_vintage_pull_id), cfg.fred_vintage_pull_id

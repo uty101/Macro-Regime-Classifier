@@ -31,6 +31,9 @@ def _not_built(n: int) -> Callable[[Config, bool], None]:
 
 def section_1(cfg: Config, pull: bool = False) -> None:
     """Section 1: raw pulls (with --pull) and the as-of panel from the pinned pull ids."""
+    import pandas as pd
+
+    from regime.data.alfred import build_asof, load_releases
     from regime.data.fred import FredClient, month_end_market
 
     log = logging.getLogger("regime")
@@ -41,6 +44,19 @@ def section_1(cfg: Config, pull: bool = False) -> None:
             log.info("pulled market series %s under pull_id %s", series_id, client.pull_id)
         log.info("market pull_id %s (pin as fred.market_pull_id in config.toml)", client.pull_id)
 
+        vclient = FredClient(cfg)
+        for series_id in cfg.fred_vintage_series:
+            vclient.pull_vintages(series_id)
+            rel = load_releases(series_id, vclient.pull_id, cfg)
+            earliest = pd.to_datetime(rel["realtime_start"]).min()
+            log.info(
+                "pulled vintages %s under pull_id %s: %d rows, %d distinct realtime_start, earliest %s",
+                series_id, vclient.pull_id, len(rel), rel["realtime_start"].nunique(), earliest.date(),
+            )
+            if earliest >= pd.Timestamp("1995-01-01"):
+                log.error("%s: earliest realtime_start %s is not before 1995-01-01; pull treated as truncated (OPEN.md)", series_id, earliest.date())
+        log.info("vintage pull_id %s (pin as fred.vintage_pull_id in config.toml)", vclient.pull_id)
+
     market_pull_id = cfg.fred_market_pull_id
     if market_pull_id:
         for series_id in cfg.fred_market_series:
@@ -48,6 +64,18 @@ def section_1(cfg: Config, pull: bool = False) -> None:
             log.info("%s: %d month-ends, %d NaN", series_id, len(s), int(s.isna().sum()))
     else:
         log.info("fred.market_pull_id not pinned; no month-end series built")
+
+    vintage_pull_id = cfg.fred_vintage_pull_id
+    if vintage_pull_id:
+        for series_id in cfg.fred_vintage_series:
+            rel = load_releases(series_id, vintage_pull_id, cfg)
+            earliest = pd.to_datetime(rel["realtime_start"]).min()
+            if earliest >= pd.Timestamp("1995-01-01"):
+                raise RuntimeError(f"{series_id}: earliest realtime_start {earliest.date()} is not before 1995-01-01")
+            table = build_asof(series_id, vintage_pull_id, cfg)
+            log.info("%s: as-of table %d rows, %d decision dates", series_id, len(table), table["decision_date"].nunique())
+    else:
+        log.info("fred.vintage_pull_id not pinned; no as-of tables built")
 
 
 section_2 = _not_built(2)

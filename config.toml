@@ -30,7 +30,7 @@ lookback_days = 10                # market value at t = last non-missing observa
 raw_dir = "data/raw"
 manifest = "data/raw/manifest.csv"
 market_pull_id = "20260922T004835Z" # pull session used for the market series; filled at step 1.3
-vintage_pull_id = ""              # pull session used for the ALFRED vintages; filled at step 1.4
+vintage_pull_id = "20260922T005041Z" # pull session used for the ALFRED vintages; filled at step 1.4
 
 [french]
 factors_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_CSV.zip"
