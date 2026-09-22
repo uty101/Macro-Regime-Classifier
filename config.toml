@@ -29,7 +29,7 @@ vintage_series = ["CPIAUCSL", "INDPRO", "UNRATE"]
 lookback_days = 10                # market value at t = last non-missing observation with t - lookback_days <= date <= t
 raw_dir = "data/raw"
 manifest = "data/raw/manifest.csv"
-market_pull_id = ""               # pull session used for the market series; filled at step 1.3
+market_pull_id = "20260922T004835Z" # pull session used for the market series; filled at step 1.3
 vintage_pull_id = ""              # pull session used for the ALFRED vintages; filled at step 1.4
 
 [french]

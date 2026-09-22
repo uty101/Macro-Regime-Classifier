@@ -4,7 +4,7 @@ One ``FredClient`` is one pull session: ``pull_id`` is stamped once at
 construction and every series pulled through the client shares it. Raw files
 are never overwritten (rule 6): ``write_raw`` raises ``FileExistsError`` and
 only ever appends to the manifest. ``pull_market`` and ``pull_vintages`` are
-built in steps 1.3 and 1.4.
+built in steps 1.3 and 1.4; ``month_end_market`` applies the 10-day lookback rule.
 """
 
 from __future__ import annotations
@@ -42,6 +42,19 @@ class FredClient:
         self.fred = Fred(api_key=key)
         self.pulled_at = datetime.now(timezone.utc)
         self.pull_id = new_pull_id(self.pulled_at)
+
+    def pull_market(self, series_id: str) -> str:
+        """Full daily history of a market series; FRED's missing markers as NaN; returns the session pull_id."""
+        raw = self.fred.get_series(series_id)
+        frame = pd.DataFrame(
+            {
+                "date": pd.to_datetime(raw.index),
+                "value": pd.to_numeric(raw.to_numpy(), errors="coerce").astype("float64"),
+                "pulled_at": self.pulled_at.isoformat(),
+            }
+        ).sort_values("date").reset_index(drop=True)
+        write_raw(frame, "fred", series_id, self.pull_id, self.cfg)
+        return self.pull_id
 
 
 def raw_path(source: str, series: str, pull_id: str, cfg: Config) -> Path:
@@ -106,3 +119,32 @@ def write_raw(
     pulled_at = str(frame["pulled_at"].iloc[0]) if len(frame) else ""
     append_manifest_row(cfg, source, series, pull_id, len(frame), first_date, last_date, digest, pulled_at)
     return path
+
+
+def month_end_from_daily(daily: pd.Series, start: pd.Timestamp, lookback_days: int) -> pd.Series:
+    """Month-end values of a daily series under the lookback rule (CLAUDE.md section 3).
+
+    For every month-end t from ``start`` to the last month-end on or before the
+    last observation date, the value is the last non-missing observation with
+    ``t - lookback_days days <= date <= t``, else NaN. Observations after t are
+    never used.
+    """
+    daily = daily.dropna().sort_index()
+    daily.index = pd.DatetimeIndex(daily.index)
+    start = pd.Timestamp(start)
+    last = daily.index.max() if len(daily) else start
+    ends = pd.date_range(start, last, freq="ME", name="date")
+    values = []
+    for t in ends:
+        window = daily.loc[(daily.index >= t - pd.Timedelta(days=lookback_days)) & (daily.index <= t)]
+        values.append(window.iloc[-1] if len(window) else float("nan"))
+    return pd.Series(values, index=ends, name=daily.name, dtype="float64")
+
+
+def month_end_market(series_id: str, pull_id: str, cfg: Config) -> pd.Series:
+    """Month-end series of ``series_id`` from the pinned raw file, named ``series_id`` and indexed by ``date``."""
+    frame = pd.read_parquet(raw_path("fred", series_id, pull_id, cfg))
+    daily = pd.Series(frame["value"].to_numpy(), index=pd.DatetimeIndex(frame["date"]), name=series_id)
+    out = month_end_from_daily(daily, pd.Timestamp(cfg.sample_start), cfg.fred_lookback_days)
+    out.name = series_id
+    return out

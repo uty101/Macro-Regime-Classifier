@@ -29,7 +29,27 @@ def _not_built(n: int) -> Callable[[Config, bool], None]:
     return section
 
 
-section_1 = _not_built(1)
+def section_1(cfg: Config, pull: bool = False) -> None:
+    """Section 1: raw pulls (with --pull) and the as-of panel from the pinned pull ids."""
+    from regime.data.fred import FredClient, month_end_market
+
+    log = logging.getLogger("regime")
+    if pull:
+        client = FredClient(cfg)
+        for series_id in cfg.fred_market_series:
+            client.pull_market(series_id)
+            log.info("pulled market series %s under pull_id %s", series_id, client.pull_id)
+        log.info("market pull_id %s (pin as fred.market_pull_id in config.toml)", client.pull_id)
+
+    market_pull_id = cfg.fred_market_pull_id
+    if market_pull_id:
+        for series_id in cfg.fred_market_series:
+            s = month_end_market(series_id, market_pull_id, cfg)
+            log.info("%s: %d month-ends, %d NaN", series_id, len(s), int(s.isna().sum()))
+    else:
+        log.info("fred.market_pull_id not pinned; no month-end series built")
+
+
 section_2 = _not_built(2)
 section_3 = _not_built(3)
 section_4 = _not_built(4)
