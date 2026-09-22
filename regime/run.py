@@ -312,6 +312,45 @@ def load_label_sources(cfg: Config) -> dict:
     }
 
 
+def project1_conditional(cfg: Config, labels: pd.DataFrame):
+    """Conditional statistics for the project 1 factors, or ``None`` and a logged skip.
+
+    Convention 7: the project 1 series are optional and nothing may depend on
+    them being present. When ``cfg.outputs_project1_file`` is missing this
+    logs ``project1: absent, conditional join skipped`` and writes no file.
+
+    When it is present the long (date, factor, ret) frame is pivoted wide,
+    ``cfg`` is replaced so ``strategy_factors`` is the project 1 factor tuple,
+    and the same ``bootstrap_conditional`` runs against the HMM filtered
+    labels on the dates the two have in common.
+    """
+    import dataclasses
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.conditional import bootstrap_conditional
+    from regime.data.project1 import load_project1
+
+    log = logging.getLogger("regime")
+    p1 = load_project1(cfg.outputs_project1_file)
+    if p1.empty:
+        log.info("project1: absent, conditional join skipped")
+        return None
+
+    wide = p1.pivot(index="date", columns="factor", values="ret").sort_index()
+    wide.index = pd.DatetimeIndex(wide.index, name="date")
+    wide.columns = [str(c) for c in wide.columns]
+    p1_cfg = dataclasses.replace(cfg, strategy_factors=tuple(wide.columns))
+
+    stats, _differences, _nan = bootstrap_conditional(labels, wide, p1_cfg, source="project1")
+    tables = _Path(cfg.outputs_tables_dir)
+    tables.mkdir(parents=True, exist_ok=True)
+    stats.to_csv(tables / "conditional_stats_project1.csv", index=False)
+    log.info("conditional_stats_project1.csv written: %d rows over %d factors", len(stats), len(wide.columns))
+    return stats
+
+
 def section_4(cfg: Config, pull: bool = False) -> None:
     """Section 4: conditional factor statistics by regime — steps 4.1 to 4.5.
 
@@ -393,6 +432,8 @@ def section_4(cfg: Config, pull: bool = False) -> None:
         "filtered_smoothed_gap.csv written: %d rows, mean absolute gap %.6f",
         len(gap), float(gap["gap"].abs().mean()),
     )
+
+    project1_conditional(cfg, sources["hmm_filtered"])                                            # 4.5
 
 
 section_5 = _not_built(5)
