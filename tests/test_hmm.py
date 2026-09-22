@@ -70,3 +70,60 @@ def test_fit_hmm_restarts_are_seeded_and_deterministic() -> None:
     assert params_a.loglik == restarts_a["loglik"].max() == params_b.loglik
     np.testing.assert_array_equal(params_a.means, params_b.means)
     assert params_a.covars.shape == (2, z.shape[1], z.shape[1])
+
+
+def _short_cfg(tmp_path, index, first_window_end):
+    """The real config on a short synthetic sample, writing every output into tmp_path."""
+    return dataclasses.replace(
+        CFG,
+        hmm_n_restarts=2,
+        hmm_n_iter=20,
+        sample_features_from=str(index[0].date()),
+        sample_first_window_end=str(pd.Timestamp(first_window_end).date()),
+        sample_end=str(index[-1].date()),
+        hmm_anchor_feature="f0",
+        hmm_anchor_tiebreak_feature="f1",
+        outputs_tables_dir=str(tmp_path / "tables"),
+        outputs_filtered_probs=str(tmp_path / "filtered_probs.csv"),
+    )
+
+
+def test_refit_parameters_apply_from_refit_date_inclusive(tmp_path) -> None:
+    from regime.models.hmm import run_expanding_hmm
+
+    z = synthetic_z(CFG, T=60)
+    # Refit dates every twelve rows from row 35: rows 35, 47 and 59 (the last
+    # row of the sample), so two boundaries to check.
+    cfg = _short_cfg(tmp_path, z.index, z.index[35])
+    probs, kept = run_expanding_hmm(z, K=2, cfg=cfg)
+
+    D0, D1, D2 = z.index[35], z.index[47], z.index[59]
+    assert [p.refit_date for p in kept] == [D0, D1, D2]
+    assert probs.index[0] == D0                       # nothing before the first refit
+    assert probs.loc[D0, "refit_date"] == D0          # in force from D inclusive
+    assert probs.loc[D1, "refit_date"] == D1
+    assert probs.loc[D2, "refit_date"] == D2
+    assert probs.loc[z.index[46], "refit_date"] == D0  # the row before D1 is still the old fit
+    assert probs.loc[z.index[58], "refit_date"] == D1  # and the row before D2 the fit before it
+    assert probs.loc[z.index[36], "refit_date"] == D0
+
+
+def test_filtered_is_fresh_full_history_pass(tmp_path) -> None:
+    from regime.models.hmm import run_expanding_hmm
+    from regime.models.hmm_numpy import forward_filter
+
+    z = synthetic_z(CFG, T=60)
+    cfg = _short_cfg(tmp_path, z.index, z.index[35])
+    probs, kept = run_expanding_hmm(z, K=2, cfg=cfg)
+
+    # The row immediately after the second refit boundary: recompute the whole
+    # forward pass from features_from under the parameters in force and take
+    # its last row. Nothing is carried across the boundary, so this must match
+    # to machine precision.
+    t = z.index[48]
+    params = kept[1]
+    assert probs.loc[t, "refit_date"] == params.refit_date
+    history = z.loc[z.index <= t].to_numpy()
+    alpha, _ = forward_filter(history, params.startprob, params.transmat, params.means, params.covars)
+
+    np.testing.assert_allclose(probs.loc[t, ["p0", "p1"]].to_numpy(dtype=float), alpha[-1], atol=1e-12)

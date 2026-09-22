@@ -20,6 +20,7 @@ import pandas as pd
 from hmmlearn.hmm import GaussianHMM
 
 from regime.config import Config
+from regime.models.hmm_numpy import forward_filter
 
 log = logging.getLogger("regime")
 
@@ -220,3 +221,142 @@ def select_k(z_first_window: pd.DataFrame, cfg: Config) -> tuple[int, pd.DataFra
     primary_path.parent.mkdir(parents=True, exist_ok=True)
     primary_path.write_text(f"{primary_K}\n", encoding="utf-8")
     return primary_K, table
+
+
+def refit_dates(cfg: Config) -> list[pd.Timestamp]:
+    """``first_window_end`` then every ``cfg.hmm_refit_month`` months, up to ``sample_end``."""
+    first, end = pd.Timestamp(cfg.sample_first_window_end), pd.Timestamp(cfg.sample_end)
+    dates, d = [], first
+    while d <= end:
+        dates.append(d)
+        d = (d + pd.DateOffset(months=cfg.hmm_refit_month)) + pd.offsets.MonthEnd(0)
+    return dates
+
+
+def model_from_params(params: HMMParams, cfg: Config) -> GaussianHMM:
+    """A ``GaussianHMM`` carrying ``params`` verbatim, for ``predict_proba`` under anchored parameters.
+
+    Nothing is fitted here: the arrays are assigned onto an unfitted model so
+    hmmlearn's own smoother can be called on the training rows. ``covars_`` is
+    set through ``covars_`` (full-shaped for every covariance type), which
+    hmmlearn converts back into its internal representation.
+    """
+    model = GaussianHMM(n_components=params.K, covariance_type=cfg.hmm_covariance_type)
+    model.startprob_ = params.startprob
+    model.transmat_ = params.transmat
+    model.means_ = params.means
+    model.covars_ = params.covars
+    return model
+
+
+def hard_labels(probs: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """``label`` = argmax state, ``assigned`` = max probability > ``cfg.hmm_assigned_threshold``.
+
+    Index ``date``; the probability columns are every ``p<k>`` column of
+    ``probs``, so the same function serves the HMM filtered, HMM smoothed and
+    GMM frames.
+    """
+    cols = [c for c in probs.columns if c.startswith("p") and c[1:].isdigit()]
+    p = probs[cols].to_numpy(dtype="float64")
+    out = pd.DataFrame(
+        {"label": p.argmax(axis=1).astype("int64"), "assigned": p.max(axis=1) > cfg.hmm_assigned_threshold},
+        index=probs.index,
+    )
+    out.index.name = "date"
+    return out
+
+
+def _state_counts(params: HMMParams, train: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Training rows per anchored state, and the degenerate flag, for one refit."""
+    assign = model_from_params(params, cfg).predict_proba(train.to_numpy(dtype="float64")).argmax(axis=1)
+    counts = pd.Series(assign).value_counts().reindex(range(params.K), fill_value=0).sort_index()
+    return pd.DataFrame(
+        {
+            "refit_date": params.refit_date.date(),
+            "state": counts.index.astype(int),
+            "n_rows": counts.to_numpy().astype(int),
+            "degenerate": counts.to_numpy() < cfg.hmm_min_state_rows,
+        }
+    )
+
+
+def run_expanding_hmm(
+    z: pd.DataFrame, K: int, cfg: Config
+) -> tuple[pd.DataFrame, list[HMMParams]]:
+    """The real-time protocol: refit annually, filter forward, never look past t.
+
+    At each refit date D the model is fitted on the model-input rows
+    ``[features_from, D]`` and anchored. Its parameters are in force for
+    ``D <= t < next D`` (convention 4). The probability at t is the last row of
+    a fresh ``forward_filter`` over ``[features_from, t]`` under those
+    parameters (convention 5) — not a state carried across the boundary, and
+    never ``predict_proba``, which would use rows after t.
+
+    Writes ``outputs/tables/hmm_restarts_<D>.csv`` per refit,
+    ``state_counts.csv``, ``anchor_agreement.csv`` and
+    ``cfg.outputs_filtered_probs``. Returns the probability frame and the
+    anchored parameter sets in refit order.
+    """
+    from regime.models.anchor import anchor, hungarian_agreement
+
+    tables_dir = Path(cfg.outputs_tables_dir)
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    features = list(z.columns)
+    start = pd.Timestamp(cfg.sample_features_from)
+    dates = [d for d in refit_dates(cfg) if d <= z.index[-1]]
+
+    kept, counts, agreements = [], [], []
+    for D in dates:
+        train = z.loc[(z.index >= start) & (z.index <= D)]
+        params, restarts = fit_hmm(train.to_numpy(dtype="float64"), K, cfg, D)
+        params, _perm = anchor(params, features, cfg)
+        restarts.to_csv(tables_dir / f"hmm_restarts_{D:%Y-%m-%d}.csv", index=False)
+        counts.append(_state_counts(params, train, cfg))
+        if kept:
+            agrees, assignment = hungarian_agreement(kept[-1].means, params.means)
+            agreements.append(
+                {
+                    "refit_date": D.date(),
+                    "agrees": agrees,
+                    "assignment": " ".join(str(int(a)) for a in assignment),
+                }
+            )
+            if not agrees:
+                log.warning(
+                    "anchor disagreement at refit %s: assignment %s against the previous refit",
+                    D.date(), list(map(int, assignment)),
+                )
+        kept.append(params)
+        log.info(
+            "refit %s: %d training rows, kept loglik %.4f, n_iter %d, converged %s, %d/%d restarts converged",
+            D.date(), len(train), params.loglik,
+            int(restarts.loc[restarts["loglik"].idxmax(), "n_iter"]), params.converged,
+            int(restarts["converged"].sum()), len(restarts),
+        )
+
+    pd.concat(counts, ignore_index=True).to_csv(tables_dir / "state_counts.csv", index=False)
+    pd.DataFrame(
+        agreements, columns=["refit_date", "agrees", "assignment"]
+    ).to_csv(tables_dir / "anchor_agreement.csv", index=False)
+
+    rows, index = [], []
+    for i, D in enumerate(dates):
+        next_D = dates[i + 1] if i + 1 < len(dates) else None
+        in_force = z.index[(z.index >= D) & ((z.index < next_D) if next_D is not None else True)]
+        params = kept[i]
+        for t in in_force:
+            history = z.loc[(z.index >= start) & (z.index <= t)].to_numpy(dtype="float64")
+            alpha, _ = forward_filter(
+                history, params.startprob, params.transmat, params.means, params.covars
+            )
+            rows.append(np.append(alpha[-1], i))
+            index.append(t)
+
+    probs = pd.DataFrame(
+        [r[:K] for r in rows], index=pd.DatetimeIndex(index, name="date"), columns=[f"p{k}" for k in range(K)]
+    )
+    probs["refit_date"] = [dates[int(r[K])] for r in rows]
+    out = Path(cfg.outputs_filtered_probs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    probs.to_csv(out, index=True, date_format="%Y-%m-%d")
+    return probs, kept
