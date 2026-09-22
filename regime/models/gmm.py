@@ -21,7 +21,7 @@ import pandas as pd
 from sklearn.mixture import GaussianMixture
 
 from regime.config import Config
-from regime.models.anchor import anchor_permutation
+from regime.models.anchor import chain_permutation
 from regime.models.hmm import refit_dates
 
 log = logging.getLogger("regime")
@@ -74,43 +74,54 @@ def fit_gmm(
     return kept, restarts
 
 
-def anchor_gmm(model: GaussianMixture, feature_names: list[str], cfg: Config) -> np.ndarray:
-    """Reorder a fitted mixture's components in place into anchor order; returns the permutation.
+def chain_gmm(model: GaussianMixture, prev_means: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Reorder a fitted mixture's components in place to follow ``prev_means``; returns perm and distances.
 
-    The same ``anchor_permutation`` the HMM uses, so state k means the same
-    thing in both frames. ``precisions_cholesky_`` is permuted with the rest
-    because ``predict_proba`` reads it, not ``covariances_``.
+    The same ``chain_permutation`` the HMM uses (convention 16), so state k
+    means the same thing in both frames. The GMM's first refit chains to the
+    HMM's first anchored refit means, which is what ties the two numberings
+    together; every later GMM refit chains to the previous GMM refit.
+
+    ``precisions_cholesky_`` is permuted with the rest because
+    ``predict_proba`` reads it, not ``covariances_``.
     """
-    perm = anchor_permutation(model.means_, feature_names, cfg)
+    perm, distances = chain_permutation(prev_means, model.means_)
     model.means_ = model.means_[perm]
     model.covariances_ = model.covariances_[perm]
     model.weights_ = model.weights_[perm]
     model.precisions_cholesky_ = model.precisions_cholesky_[perm]
-    return perm
+    return perm, distances
 
 
-def run_expanding_gmm(z: pd.DataFrame, K: int, cfg: Config) -> pd.DataFrame:
+def run_expanding_gmm(
+    z: pd.DataFrame, K: int, cfg: Config, chain_to: np.ndarray
+) -> pd.DataFrame:
     """The HMM's refit dates and protocol with the transition matrix removed.
 
     At each refit date D the mixture is fitted on ``[features_from, D]`` and
-    anchored. For ``D <= t < next D`` the probability at t is
-    ``predict_proba`` of row t alone under the anchored parameters in force.
+    chained. For ``D <= t < next D`` the probability at t is ``predict_proba``
+    of row t alone under the parameters in force.
+
+    ``chain_to`` is the HMM's first anchored refit means: the GMM's first
+    refit chains to them and every later GMM refit chains to the previous GMM
+    refit (convention 16), so the two models' state numbers refer to the same
+    regimes and the confusion table between them is readable.
 
     Writes ``outputs/tables/gmm_restarts_<D>.csv`` per refit and
     ``cfg.outputs_gmm_filtered_probs``.
     """
     tables_dir = Path(cfg.outputs_tables_dir)
     tables_dir.mkdir(parents=True, exist_ok=True)
-    features = list(z.columns)
     start = pd.Timestamp(cfg.sample_features_from)
     dates = [d for d in refit_dates(cfg) if d <= z.index[-1]]
 
-    frames = []
+    frames, previous = [], np.asarray(chain_to, dtype="float64")
     for i, D in enumerate(dates):
         train = z.loc[(z.index >= start) & (z.index <= D)]
         model, restarts = fit_gmm(train.to_numpy(dtype="float64"), K, cfg, D)
         restarts.to_csv(tables_dir / f"gmm_restarts_{D:%Y-%m-%d}.csv", index=False)
-        anchor_gmm(model, features, cfg)
+        _perm, _distances = chain_gmm(model, previous)
+        previous = model.means_
 
         next_D = dates[i + 1] if i + 1 < len(dates) else None
         in_force = z.loc[(z.index >= D) & ((z.index < next_D) if next_D is not None else True)]

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from regime.config import load_config
-from regime.models.gmm import anchor_gmm, fit_gmm, run_expanding_gmm
+from regime.models.gmm import chain_gmm, fit_gmm, run_expanding_gmm
 from tests.test_hmm import synthetic_z
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,17 +44,21 @@ def test_gmm_restarts_seeded_and_deterministic(tmp_path) -> None:
 def test_gmm_probability_is_predict_proba_under_params_in_force(tmp_path) -> None:
     z = synthetic_z(CFG, T=60)
     cfg = _cfg(tmp_path, z.index, z.index[35])
-    probs = run_expanding_gmm(z, K=2, cfg=cfg)
+    seed_means = np.array([[-1.0, 0.0, 1.0], [1.0, 0.5, -1.0]])[:, : z.shape[1]]
+    probs = run_expanding_gmm(z, K=2, cfg=cfg, chain_to=seed_means)
 
-    # Refit the second refit date independently, anchor it the same way, and
-    # score one row of the window that fit governs. A mixture has no
-    # transition matrix, so the probability at t must be that one row's
-    # predict_proba and nothing else — no history, no carry-over.
+    # Refit every refit date up to the one that governs t, chaining exactly as
+    # run_expanding_gmm does, then score one row. A mixture has no transition
+    # matrix, so the probability at t must be that one row's predict_proba and
+    # nothing else — no history, no carry-over.
     D, t = z.index[47], z.index[50]
     assert probs.loc[t, "refit_date"] == D
 
-    model, _ = fit_gmm(z.loc[z.index <= D].to_numpy(), K=2, cfg=cfg, refit_date=D)
-    anchor_gmm(model, list(z.columns), cfg)
+    previous = seed_means
+    for refit in (z.index[35], D):
+        model, _ = fit_gmm(z.loc[z.index <= refit].to_numpy(), K=2, cfg=cfg, refit_date=refit)
+        chain_gmm(model, previous)
+        previous = model.means_
     expected = model.predict_proba(z.loc[[t]].to_numpy())[0]
 
     np.testing.assert_allclose(probs.loc[t, ["p0", "p1"]].to_numpy(dtype=float), expected, atol=1e-12)

@@ -85,3 +85,53 @@ def test_param_drift_shape(tmp_path) -> None:
     for D in refits:
         matrix = pd.read_csv(tmp_path / f"transition_matrix_{D:%Y-%m-%d}.csv", index_col="from_state")
         assert list(matrix.columns) == [f"to_{k}" for k in range(K)]
+
+
+def _diagnostics(**d7) -> pd.DataFrame:
+    """A two-row diagnostics table; d7 kwargs override the core_no_level row."""
+    base = {
+        "n_filtered_changes": 30, "n_changes_on_refit_dates": 5, "share_on_refit_dates": 0.17,
+        "median_run_months": 6.0, "max_expected_duration": 80.0, "n_infinite_durations": 0,
+        "n_degenerate_states": 0, "max_matched_distance": 0.8, "detects_2008": True,
+        "detects_2020": True, "filtered_smoothed_agreement": 0.7,
+    }
+    core = dict(base, feature_set="core", n_changes_on_refit_dates=15)
+    nolevel = dict(base, feature_set="core_no_level", **d7)
+    return pd.DataFrame([core, nolevel])
+
+
+def test_primary_feature_set_rule_needs_all_three_conditions() -> None:
+    from regime.tables import primary_feature_set_decision
+
+    # All three hold: d = 7 detects both episodes and makes fewer refit-date
+    # changes than d = 8's 15.
+    assert primary_feature_set_decision(_diagnostics(n_changes_on_refit_dates=5)) == "core_no_level"
+
+    # Each condition alone is enough to send it back to core.
+    assert primary_feature_set_decision(_diagnostics(detects_2008=False)) == "core"
+    assert primary_feature_set_decision(_diagnostics(detects_2020=False)) == "core"
+    assert primary_feature_set_decision(_diagnostics(n_changes_on_refit_dates=15)) == "core"  # not strictly below
+    assert primary_feature_set_decision(_diagnostics(n_changes_on_refit_dates=16)) == "core"
+
+    # No other column enters the rule: make every one of them worse for d = 7
+    # while the three conditions hold, and it still wins.
+    assert primary_feature_set_decision(
+        _diagnostics(
+            n_changes_on_refit_dates=5, median_run_months=1.0, n_degenerate_states=9,
+            max_matched_distance=99.0, filtered_smoothed_agreement=0.0, n_infinite_durations=7,
+        )
+    ) == "core_no_level"
+
+
+def test_label_runs_lengths_and_starts() -> None:
+    from regime.tables import label_runs
+
+    index = pd.date_range("2005-01-31", periods=7, freq="ME", name="date")
+    labels = pd.Series([0, 0, 1, 1, 1, 0, 2], index=index)
+
+    runs = label_runs(labels)
+
+    assert list(runs["state"]) == [0, 1, 0, 2]
+    assert list(runs["length"]) == [2, 3, 1, 1]
+    assert list(runs["start"]) == [index[0], index[2], index[5], index[6]]
+    assert runs["length"].sum() == len(labels)

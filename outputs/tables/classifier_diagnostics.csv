@@ -1,0 +1,3 @@
+feature_set,n_filtered_changes,n_changes_on_refit_dates,share_on_refit_dates,median_run_months,max_expected_duration,n_infinite_durations,n_degenerate_states,max_matched_distance,detects_2008,detects_2020,filtered_smoothed_agreement
+core,20,9,0.45,10.0,129.87537037913293,1,0,2.6893908073181687,False,True,0.6821705426356589
+core_no_level,21,7,0.3333333333333333,9.5,57.10272796063988,0,0,2.1314511105461564,False,False,0.40310077519379844

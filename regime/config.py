@@ -49,6 +49,7 @@ class Config:
     # [features]
     features_core: tuple
     features_core_no_level: tuple
+    features_primary: str
     features_robustness: tuple
     features_change_lag: int
     features_cpi_lag: int
@@ -130,6 +131,28 @@ class Config:
 
 
 _ALLOWED_TYPES = (int, float, str, bool, tuple)
+
+FEATURE_SETS = ("core", "core_no_level")
+
+
+def primary_columns(cfg: "Config") -> tuple:
+    """The model-input columns named by ``cfg.features_primary``.
+
+    Every ``model_input`` call from section 3 onward resolves its columns
+    through here, so switching the primary feature set is a one-key change in
+    ``config.toml`` and never a change in the pipeline code. The non-primary
+    set is what step 6.6 reruns.
+    """
+    return feature_set_columns(cfg, cfg.features_primary)
+
+
+def feature_set_columns(cfg: "Config", name: str) -> tuple:
+    """The columns of a named feature set: ``"core"`` (d = 8) or ``"core_no_level"`` (d = 7)."""
+    if name == "core":
+        return tuple(cfg.features_core)
+    if name == "core_no_level":
+        return tuple(cfg.features_core_no_level)
+    raise ValueError(f"unknown feature set {name!r}; expected one of {FEATURE_SETS}")
 
 
 def flatten_toml(raw: dict) -> dict:

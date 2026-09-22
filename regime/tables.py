@@ -58,9 +58,9 @@ def write_hmm_tables(params: list, feature_names: list[str], cfg: Config) -> Non
 
     All three are written from anchored parameters, so state k is the same
     slot in every row — which is what makes ``param_drift.csv`` readable as
-    drift rather than as relabelling. Whether that slot holds the same regime
-    from refit to refit is the separate question ``anchor_agreement.csv``
-    answers.
+    drift rather than as relabelling. Under chained numbering (convention 16)
+    that slot follows the nearest state from refit to refit; how far it had to
+    reach each year is ``matched_distance`` in ``anchor_chain.csv``.
     """
     tables_dir = Path(cfg.outputs_tables_dir)
     tables_dir.mkdir(parents=True, exist_ok=True)
@@ -95,3 +95,104 @@ def write_hmm_tables(params: list, feature_names: list[str], cfg: Config) -> Non
     pd.DataFrame(drift, columns=["refit_date", "state", "feature", "mean", "variance"]).to_csv(
         tables_dir / "param_drift.csv", index=False
     )
+
+
+CLASSIFIER_DIAGNOSTIC_COLUMNS = (
+    "feature_set", "n_filtered_changes", "n_changes_on_refit_dates", "share_on_refit_dates",
+    "median_run_months", "max_expected_duration", "n_infinite_durations",
+    "n_degenerate_states", "max_matched_distance", "detects_2008", "detects_2020",
+    "filtered_smoothed_agreement",
+)
+
+DIAGNOSTICS_FROM = "2005-01-31"
+
+
+def label_runs(labels: pd.Series) -> pd.DataFrame:
+    """Consecutive runs of a constant label: columns ``start, state, length``."""
+    values = labels.to_numpy()
+    breaks = np.flatnonzero(np.r_[True, values[1:] != values[:-1]])
+    lengths = np.diff(np.r_[breaks, len(values)])
+    return pd.DataFrame(
+        {
+            "start": labels.index[breaks],
+            "state": values[breaks].astype(int),
+            "length": lengths.astype(int),
+        }
+    )
+
+
+def classifier_diagnostics_row(
+    feature_set: str,
+    filtered_labels: pd.DataFrame,
+    smoothed_labels: pd.DataFrame,
+    refits: list,
+    durations: pd.DataFrame,
+    state_counts: pd.DataFrame,
+    chain_table: pd.DataFrame,
+) -> dict:
+    """One row of ``classifier_diagnostics.csv`` for one feature set.
+
+    Every count of label changes is taken from ``DIAGNOSTICS_FROM`` (2005-01-31)
+    so the first out-of-sample date, which has no predecessor, is excluded.
+    ``median_run_months`` is over the whole filtered series, including that
+    first date's run.
+
+    ``n_changes_on_refit_dates`` is the diagnostic the revision exists for: a
+    label change that lands exactly on a refit date is a change the classifier
+    made because it was refitted, not because the data moved.
+    """
+    labels = filtered_labels["label"]
+    changed = labels.ne(labels.shift())
+    changed.iloc[0] = False
+    change_dates = changed.index[changed.to_numpy()]
+    change_dates = change_dates[change_dates >= pd.Timestamp(DIAGNOSTICS_FROM)]
+    refit_set = {pd.Timestamp(d) for d in refits}
+    on_refit = [d for d in change_dates if d in refit_set]
+
+    finite = durations.loc[np.isfinite(durations["expected_duration"]), "expected_duration"]
+    window = filtered_labels.index >= pd.Timestamp(DIAGNOSTICS_FROM)
+    shared = filtered_labels.index[window].intersection(smoothed_labels.index)
+
+    def label_at(date: str) -> int | None:
+        stamp = pd.Timestamp(date)
+        return int(labels.loc[stamp]) if stamp in labels.index else None
+
+    return {
+        "feature_set": feature_set,
+        "n_filtered_changes": len(change_dates),
+        "n_changes_on_refit_dates": len(on_refit),
+        "share_on_refit_dates": (len(on_refit) / len(change_dates)) if len(change_dates) else float("nan"),
+        "median_run_months": float(label_runs(labels)["length"].median()),
+        "max_expected_duration": float(finite.max()) if len(finite) else float("nan"),
+        "n_infinite_durations": int((~np.isfinite(durations["expected_duration"])).sum()),
+        "n_degenerate_states": int(state_counts["degenerate"].sum()),
+        "max_matched_distance": float(chain_table["matched_distance"].max()),
+        "detects_2008": label_at("2008-11-30") != label_at("2008-06-30"),
+        "detects_2020": label_at("2020-04-30") != label_at("2019-12-31"),
+        "filtered_smoothed_agreement": float(
+            (filtered_labels.loc[shared, "label"] == smoothed_labels.loc[shared, "label"]).mean()
+        ),
+    }
+
+
+def primary_feature_set_decision(diagnostics: pd.DataFrame) -> str:
+    """The pre-registered rule, applied mechanically to ``classifier_diagnostics.csv``.
+
+    Fixed in ``instructions/03b_section_3_revision.md`` before the diagnostics
+    existed, and quoted verbatim in ``decisions/primary_feature_set.md``:
+
+        primary becomes "core_no_level" if and only if the d = 7 row has
+        detects_2008 true AND detects_2020 true AND n_changes_on_refit_dates
+        strictly below the d = 8 row's. Otherwise primary stays "core".
+
+    No other column of the table enters the decision. The rest are reported so
+    the reviewer can see what the rule did not weigh.
+    """
+    rows = diagnostics.set_index("feature_set")
+    d7, d8 = rows.loc["core_no_level"], rows.loc["core"]
+    chooses_d7 = (
+        bool(d7["detects_2008"])
+        and bool(d7["detects_2020"])
+        and int(d7["n_changes_on_refit_dates"]) < int(d8["n_changes_on_refit_dates"])
+    )
+    return "core_no_level" if chooses_d7 else "core"

@@ -129,56 +129,152 @@ def section_2(cfg: Config, pull: bool = False) -> None:
     log.info("features review chart written to %s", chart)
 
 
-def section_3(cfg: Config, pull: bool = False) -> None:
-    """Section 3: the four label sources, from features_z.parquet — steps 3.1 to 3.7.
+ROBUSTNESS_DIR_NAME = {"core": "level", "core_no_level": "nolevel"}
 
-    Nothing here reads raw data or recomputes z (convention 3): every fit,
-    filter and smooth reads the same real-time z rows section 2 wrote.
+
+def _variant_cfg(cfg: Config, name: str):
+    """``cfg`` with every output path redirected under ``robustness/<name>/``.
+
+    The non-primary feature set writes here. Nothing in the main outputs is
+    touched, and the variant is driven entirely by ``dataclasses.replace`` —
+    never by editing ``config.toml`` (section 6's rule, applied early because
+    section 3 now runs two feature sets).
     """
+    import dataclasses
+
+    folder = ROBUSTNESS_DIR_NAME[name]
+    return dataclasses.replace(
+        cfg,
+        outputs_tables_dir=f"{cfg.outputs_tables_dir}/robustness/{folder}",
+        outputs_filtered_probs=f"{cfg.outputs_regimes_dir}/robustness/{folder}/filtered_probs.csv",
+        outputs_smoothed_probs=f"{cfg.outputs_regimes_dir}/robustness/{folder}/smoothed_probs.csv",
+        outputs_gmm_filtered_probs=f"{cfg.outputs_regimes_dir}/robustness/{folder}/gmm_filtered_probs.csv",
+        outputs_dropped_rows=f"{cfg.outputs_processed_dir}/dropped_rows_{folder}.csv",
+        outputs_primary_k=f"{cfg.outputs_processed_dir}/primary_k_{folder}.txt",
+    )
+
+
+def _run_feature_set(z, columns, K: int, cfg: Config) -> dict:
+    """The whole classifier pipeline for one column set: steps 3.4 to 3.7.
+
+    State numbering is chained throughout (convention 16): the expanding HMM
+    sorts its first refit and chains the rest, the smoothed fit chains to the
+    last expanding refit, and the GMM chains from the expanding HMM's first
+    anchored refit. So every frame this returns numbers the same regime the
+    same way and the three can be compared date by date.
+    """
+    from pathlib import Path as _Path
+
     import pandas as pd
 
     from regime.features import model_input
     from regime.models.gmm import run_expanding_gmm
-    from regime.models.hmm import (
-        hard_labels,
-        run_expanding_hmm,
-        run_smoothed_hmm,
-        select_k,
-    )
-    from regime.models.rules import rules_labels
+    from regime.models.hmm import hard_labels, run_expanding_hmm, run_smoothed_hmm
     from regime.tables import write_hmm_tables
+
+    x = model_input(z, cfg, columns=tuple(columns))
+    filtered, params = run_expanding_hmm(x, K, cfg)                          # 3.4
+    smoothed, _ = run_smoothed_hmm(x, K, cfg, chain_to=params[-1].means)     # 3.5
+    gmm = run_expanding_gmm(x, K, cfg, chain_to=params[0].means)             # 3.6
+    write_hmm_tables(params, list(x.columns), cfg)                           # 3.7
+
+    tables = _Path(cfg.outputs_tables_dir)
+    return {
+        "model_input": x,
+        "params": params,
+        "filtered_labels": hard_labels(filtered, cfg),
+        "smoothed_labels": hard_labels(smoothed, cfg),
+        "gmm_labels": hard_labels(gmm, cfg),
+        "durations": pd.read_csv(tables / "expected_duration.csv"),
+        "state_counts": pd.read_csv(tables / "state_counts.csv"),
+        "chain_table": pd.read_csv(tables / "anchor_chain.csv"),
+    }
+
+
+def section_3(cfg: Config, pull: bool = False) -> None:
+    """Section 3: the four label sources, from features_z.parquet — steps 3.1 to 3.7.
+
+    Nothing here reads raw data or recomputes z (convention 3), and nothing
+    here reads a factor return. Both feature sets are run every time: the
+    primary one named by ``cfg.features_primary`` into the main outputs, the
+    other into ``robustness/<name>/``. The diagnostics that decide which is
+    primary are therefore regenerated on every run and can never go stale
+    against the config key they justify.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.config import FEATURE_SETS, feature_set_columns
+    from regime.models.hmm import refit_dates, select_k
+    from regime.models.rules import rules_labels
+    from regime.tables import (
+        CLASSIFIER_DIAGNOSTIC_COLUMNS,
+        classifier_diagnostics_row,
+        primary_feature_set_decision,
+    )
 
     log = logging.getLogger("regime")
     raw = pd.read_parquet(cfg.outputs_features_raw)
     z = pd.read_parquet(cfg.outputs_features_z)
-    x = model_input(z, cfg)
-    log.info("model input read: %d rows x %d columns, %s to %s", *x.shape, x.index[0].date(), x.index[-1].date())
 
-    labels = rules_labels(raw, cfg)                                         # 3.1
+    labels = rules_labels(raw, cfg)                                          # 3.1
     log.info("rules labels: %d rows, value counts %s", len(labels), labels.value_counts().sort_index().to_dict())
 
-    first_window = x.loc[x.index <= pd.Timestamp(cfg.sample_first_window_end)]
-    primary_K, bic_table = select_k(first_window, cfg)                      # 3.3
-    log.info("primary_K = %d from %d rows of the first window", primary_K, len(first_window))
+    primary = cfg.features_primary
+    other = next(name for name in FEATURE_SETS if name != primary)
+    window_end = pd.Timestamp(cfg.sample_first_window_end)
 
-    filtered, params = run_expanding_hmm(x, primary_K, cfg)                 # 3.4
-    filtered_labels = hard_labels(filtered, cfg)
-    log.info(
-        "hmm filtered: %d dates, value counts %s, %d unassigned",
-        len(filtered_labels), filtered_labels["label"].value_counts().sort_index().to_dict(),
-        int((~filtered_labels["assigned"]).sum()),
-    )
+    # 3.3 — K is selected once, on the d = 8 core set, and used for both. The
+    # other set's BIC table is written for information only; K is not
+    # reselected, so a feature-set change cannot silently change K too.
+    core_input = _model_input_for(z, cfg, "core")
+    primary_K, _bic = select_k(core_input.loc[core_input.index <= window_end], cfg)
+    log.info("primary_K = %d from the core (d=%d) first window", primary_K, core_input.shape[1])
 
-    smoothed, _smoothed_params = run_smoothed_hmm(x, primary_K, cfg)        # 3.5
-    smoothed_labels = hard_labels(smoothed, cfg)
-    log.info("hmm smoothed: %d dates, value counts %s", len(smoothed_labels), smoothed_labels["label"].value_counts().sort_index().to_dict())
+    results, diagnostics = {}, []
+    for name in (primary, other):
+        run_cfg = cfg if name == primary else _variant_cfg(cfg, name)
+        columns = feature_set_columns(cfg, name)
+        if name != primary:
+            other_input = _model_input_for(z, run_cfg, name)
+            select_k(other_input.loc[other_input.index <= window_end], run_cfg)
+            log.info("bic_by_k for %s (d=%d) written for information only; K stays %d", name, len(columns), primary_K)
+        log.info("running %s (d=%d) into %s", name, len(columns), run_cfg.outputs_tables_dir)
+        results[name] = _run_feature_set(z, columns, primary_K, run_cfg)
 
-    gmm = run_expanding_gmm(x, primary_K, cfg)                              # 3.6
-    gmm_labels = hard_labels(gmm, cfg)
-    log.info("gmm filtered: %d dates, value counts %s", len(gmm_labels), gmm_labels["label"].value_counts().sort_index().to_dict())
+    refits = [d for d in refit_dates(cfg) if d <= z.index[-1]]
+    for name in FEATURE_SETS:
+        r = results[name]
+        diagnostics.append(
+            classifier_diagnostics_row(
+                name, r["filtered_labels"], r["smoothed_labels"], refits,
+                r["durations"], r["state_counts"], r["chain_table"],
+            )
+        )
+    table = pd.DataFrame(diagnostics, columns=list(CLASSIFIER_DIAGNOSTIC_COLUMNS))
+    out = _Path(cfg.outputs_tables_dir) / "classifier_diagnostics.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out, index=False)
+    log.info("classifier_diagnostics.csv written:\n%s", table.to_string(index=False))
 
-    write_hmm_tables(params, list(x.columns), cfg)                          # 3.7
-    log.info("hmm tables written for %d refits under %s", len(params), cfg.outputs_tables_dir)
+    decided = primary_feature_set_decision(table)
+    log.info("pre-registered rule selects features.primary = %r (config has %r)", decided, primary)
+    if decided != primary:
+        log.warning(
+            "features.primary in config.toml is %r but the pre-registered rule on the current "
+            "diagnostics selects %r; decisions/primary_feature_set.md and config.toml must be "
+            "updated together and the outputs regenerated",
+            primary, decided,
+        )
+
+
+def _model_input_for(z, cfg: Config, name: str):
+    """``model_input`` on a named feature set, without writing over another set's dropped rows."""
+    from regime.config import feature_set_columns
+    from regime.features import model_input
+
+    return model_input(z, cfg, columns=feature_set_columns(cfg, name))
 
 
 section_4 = _not_built(4)

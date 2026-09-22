@@ -137,7 +137,8 @@ def test_smoothed_rows_sum_to_one_and_cover_all_model_input_dates(tmp_path) -> N
         _short_cfg(tmp_path, z.index, z.index[35]),
         outputs_smoothed_probs=str(tmp_path / "smoothed_probs.csv"),
     )
-    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg)
+    chain_to = np.array([[-1.0, 0.0, 1.0], [1.0, 0.5, -1.0]])[:, : z.shape[1]]
+    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg, chain_to=chain_to)
 
     assert list(probs.index) == list(z.index)          # every model-input date, not just the OOS ones
     assert list(probs.columns) == ["p0", "p1"]
@@ -154,7 +155,8 @@ def test_smoothed_final_row_equals_forward_filter_final_row(tmp_path) -> None:
         _short_cfg(tmp_path, z.index, z.index[35]),
         outputs_smoothed_probs=str(tmp_path / "smoothed_probs.csv"),
     )
-    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg)
+    chain_to = np.array([[-1.0, 0.0, 1.0], [1.0, 0.5, -1.0]])[:, : z.shape[1]]
+    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg, chain_to=chain_to)
 
     alpha, _ = forward_filter(
         z.to_numpy(), params.startprob, params.transmat, params.means, params.covars

@@ -292,12 +292,16 @@ def run_expanding_hmm(
     parameters (convention 5) — not a state carried across the boundary, and
     never ``predict_proba``, which would use rows after t.
 
+    State numbering follows convention 16: the first refit is sorted by
+    ``anchor_permutation``, every later refit is chained to the previous
+    refit's anchored means by ``chain_permutation``.
+
     Writes ``outputs/tables/hmm_restarts_<D>.csv`` per refit,
-    ``state_counts.csv``, ``anchor_agreement.csv`` and
+    ``state_counts.csv``, ``anchor_chain.csv`` and
     ``cfg.outputs_filtered_probs``. Returns the probability frame and the
     anchored parameter sets in refit order.
     """
-    from regime.models.anchor import anchor, hungarian_agreement
+    from regime.models.anchor import anchor, anchor_permutation, chain
 
     tables_dir = Path(cfg.outputs_tables_dir)
     tables_dir.mkdir(parents=True, exist_ok=True)
@@ -305,27 +309,37 @@ def run_expanding_hmm(
     start = pd.Timestamp(cfg.sample_features_from)
     dates = [d for d in refit_dates(cfg) if d <= z.index[-1]]
 
-    kept, counts, agreements = [], [], []
+    kept, counts, chain_rows = [], [], []
     for D in dates:
         train = z.loc[(z.index >= start) & (z.index <= D)]
-        params, restarts = fit_hmm(train.to_numpy(dtype="float64"), K, cfg, D)
-        params, _perm = anchor(params, features, cfg)
+        raw_params, restarts = fit_hmm(train.to_numpy(dtype="float64"), K, cfg, D)
         restarts.to_csv(tables_dir / f"hmm_restarts_{D:%Y-%m-%d}.csv", index=False)
-        counts.append(_state_counts(params, train, cfg))
-        if kept:
-            agrees, assignment = hungarian_agreement(kept[-1].means, params.means)
-            agreements.append(
+
+        # What the old sort rule would have called each state, recorded for
+        # comparison at every refit but never used to order anything after the
+        # first.
+        sort_perm = anchor_permutation(raw_params.means, features, cfg)
+        if not kept:
+            params, perm = anchor(raw_params, features, cfg)
+            distances = np.zeros(K)
+        else:
+            params, perm, distances = chain(raw_params, kept[-1].means)
+        sort_slot = {int(s): j for j, s in enumerate(sort_perm)}
+        for j in range(K):
+            chain_rows.append(
                 {
                     "refit_date": D.date(),
-                    "agrees": agrees,
-                    "assignment": " ".join(str(int(a)) for a in assignment),
+                    "state": j,
+                    "matched_distance": float(distances[j]),
+                    "sort_rule_state": sort_slot[int(perm[j])],
                 }
             )
-            if not agrees:
+            if distances[j] > 1.0:
                 log.warning(
-                    "anchor disagreement at refit %s: assignment %s against the previous refit",
-                    D.date(), list(map(int, assignment)),
+                    "refit %s state %d: matched at distance %.3f z from the previous refit",
+                    D.date(), j, distances[j],
                 )
+        counts.append(_state_counts(params, train, cfg))
         kept.append(params)
         log.info(
             "refit %s: %d training rows, kept loglik %.4f, n_iter %d, converged %s, %d/%d restarts converged",
@@ -336,8 +350,8 @@ def run_expanding_hmm(
 
     pd.concat(counts, ignore_index=True).to_csv(tables_dir / "state_counts.csv", index=False)
     pd.DataFrame(
-        agreements, columns=["refit_date", "agrees", "assignment"]
-    ).to_csv(tables_dir / "anchor_agreement.csv", index=False)
+        chain_rows, columns=["refit_date", "state", "matched_distance", "sort_rule_state"]
+    ).to_csv(tables_dir / "anchor_chain.csv", index=False)
 
     rows, index = [], []
     for i, D in enumerate(dates):
@@ -362,7 +376,9 @@ def run_expanding_hmm(
     return probs, kept
 
 
-def run_smoothed_hmm(z: pd.DataFrame, K: int, cfg: Config) -> tuple[pd.DataFrame, HMMParams]:
+def run_smoothed_hmm(
+    z: pd.DataFrame, K: int, cfg: Config, chain_to: np.ndarray
+) -> tuple[pd.DataFrame, HMMParams]:
     """One fit on the whole sample, smoothed over the whole sample: the hindsight benchmark.
 
     This is what the regimes look like to someone who already knows how the
@@ -372,10 +388,15 @@ def run_smoothed_hmm(z: pd.DataFrame, K: int, cfg: Config) -> tuple[pd.DataFrame
     regime knowledge would have been worth. Nothing in the timed strategy may
     read it (step 3.8 enforces that for ``strategy.py``).
 
+    ``chain_to`` is the last expanding refit's anchored state means: the
+    smoothed states are chained to them (convention 16) so that the smoothed
+    and filtered frames number the same regime the same way and the two can be
+    compared date by date.
+
     Writes ``outputs/tables/hmm_restarts_smoothed.csv`` and
     ``cfg.outputs_smoothed_probs``.
     """
-    from regime.models.anchor import anchor
+    from regime.models.anchor import chain
 
     tables_dir = Path(cfg.outputs_tables_dir)
     tables_dir.mkdir(parents=True, exist_ok=True)
@@ -383,12 +404,14 @@ def run_smoothed_hmm(z: pd.DataFrame, K: int, cfg: Config) -> tuple[pd.DataFrame
     train = z.loc[(z.index >= start) & (z.index <= end)]
 
     params, restarts = fit_hmm(train.to_numpy(dtype="float64"), K, cfg, end)
-    params, _perm = anchor(params, list(z.columns), cfg)
+    params, _perm, distances = chain(params, chain_to)
     restarts.to_csv(tables_dir / "hmm_restarts_smoothed.csv", index=False)
     log.info(
-        "smoothed fit on %d rows to %s: kept loglik %.4f, n_iter %d, converged %s",
+        "smoothed fit on %d rows to %s: kept loglik %.4f, n_iter %d, converged %s, "
+        "chained to the last refit at distances %s",
         len(train), end.date(), params.loglik,
         int(restarts.loc[restarts["loglik"].idxmax(), "n_iter"]), params.converged,
+        np.round(distances, 3).tolist(),
     )
 
     smoothed = model_from_params(params, cfg).predict_proba(train.to_numpy(dtype="float64"))

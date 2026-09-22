@@ -40,7 +40,8 @@ pull_id = "20260918T083009Z"      # first snapshot; filled at step 1.5; the stra
 
 [features]
 core = ["dgs10_level", "dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]
-core_no_level = ["dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]  # step 6.6: core without dgs10_level (convention 15)
+core_no_level = ["dgs10_chg12", "slope_2s10s", "cpi_3m_ann", "indpro_chg12", "dollar_chg12", "oil_chg12", "log_vix"]  # core without dgs10_level (convention 15)
+primary = "core"                  # "core" (d=8) or "core_no_level" (d=7); set by the pre-registered rule in decisions/primary_feature_set.md. Every model_input call from section 3 on uses this set; the other is the step 6.6 rerun.
 robustness = ["unrate_chg12", "breakeven_chg12"]
 change_lag = 12                   # rows of the decision-date index (market series) or of the vintage's observation-month index (INDPRO, UNRATE)
 cpi_lag = 3                       # observation months between CPI_m and CPI_{m-3}; annualisation power is 12 / cpi_lag
