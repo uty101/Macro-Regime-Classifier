@@ -2,9 +2,9 @@
 
 ## Section
 
-This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Config`, the `FredClient` raw-write conventions, the FRED market pulls and `month_end_market`, the ALFRED vintage pulls and `build_asof`, the French pull, the project 1 adapter, and the as-of panel `data/processed/asof_panel.parquet`. **The section is incomplete: steps 1.3, 1.4 and 1.7 are not built because `FRED_API_KEY` is not set.** It is absent from the process environment, the User scope and the Machine scope (`[Environment]::GetEnvironmentVariable("FRED_API_KEY", "User")` and `("FRED_API_KEY", "Machine")` are both `$null`), and there is no `.env` in the repo. The session first stopped before 1.3 as instructed (17 September); on resumption (18 September) the two steps that do not depend on FRED — 1.5 (French, plain HTTP download) and 1.6 (no network) — were built and committed out of numeric order, following rule 1's principle of finishing every step that does not depend on the blocker. Step 1.7 depends on the market and vintage files from 1.3 and 1.4 and was not started.
+This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Config`, the `FredClient` raw-write conventions, the FRED market pulls and `month_end_market`, the ALFRED vintage pulls and `build_asof`, the French pull, the project 1 adapter, and the as-of panel `data/processed/asof_panel.parquet`. **Every step completed.** The section ran across three sittings because `FRED_API_KEY` was not available at first: 1.1 and 1.2 on 17 September (stopped before 1.3 as instructed), 1.5 and 1.6 on 18 September (the two steps that do not need FRED, built out of numeric order under rule 1's principle of finishing everything that does not depend on the blocker), and 1.3, 1.4 and 1.7 on 22 September once the key was supplied. The key was placed in the User environment scope; it is not in the repo and not in any committed file. Two intermediate review files were committed at the stops (`7cbe025`, `24322a6`); this file supersedes them.
 
-**API needed to finish the section: a FRED API key**, exported as the environment variable `FRED_API_KEY` (free from https://fred.stlouisfed.org/docs/api/api_key.html). With it set, a new session runs steps 1.3, 1.4 and 1.7 in that order and pushes.
+`python -m regime.run --section 1` rebuilds the three as-of tables and the panel from the pinned pull ids in about 20 seconds and is idempotent (the panel's SHA-256 is identical across two consecutive runs, shown below).
 
 ## Steps completed
 
@@ -12,8 +12,11 @@ This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Con
 - `step 1.2: FredClient with one pull_id per session, write_raw that never overwrites, and the append-only manifest` — `1fb67ac`
 - `step 1.5: French pull, parse, checksum; pin french.pull_id 20260918T083009Z and sample.end 2026-07-31` — `ff9e132`
 - `step 1.6: project 1 adapter that logs project1: absent and returns the empty (date, factor, ret) schema` — `61ac025`
+- `step 1.3: market series pulls and month_end_market with the 10-day lookback; pin fred.market_pull_id 20260922T004835Z` — `89b9992`
+- `step 1.4: ALFRED vintage pulls and build_asof with the as-of-t release rule; pin fred.vintage_pull_id 20260922T005041Z` — `c468292`
+- `step 1.7: build_asof_panel with the sixteen-column schema, planted-future-value and same-vintage lag tests` — `327b8db`
 
-Not started: 1.3, 1.4, 1.7 (need `FRED_API_KEY`).
+(Listed in commit order; 1.5 and 1.6 precede 1.3 in history for the reason above.)
 
 ## Evidence
 
@@ -110,7 +113,7 @@ outputs_runtime_log                      str
 86 fields
 ```
 
-Every `config.toml` array is a `tuple`; `hmm_tol`, `gmm_tol`, `hmm_assigned_threshold`, `hmm_anchor_tie_tolerance`, `bootstrap_p_low`, `bootstrap_p_high` and `strategy_headline_eta` are `float`; at step 1.1 the three `*_pull_id` fields and `sample_end` were the empty `str` placeholders; `french_pull_id` and `sample_end` were filled at step 1.5, and the two FRED pull ids stay empty until steps 1.3 and 1.4.
+Every `config.toml` array is a `tuple`; `hmm_tol`, `gmm_tol`, `hmm_assigned_threshold`, `hmm_anchor_tie_tolerance`, `bootstrap_p_low`, `bootstrap_p_high` and `strategy_headline_eta` are `float`. At step 1.1 the three `*_pull_id` fields and `sample_end` were the empty `str` placeholders; each was filled by its owning step (1.3, 1.4, 1.5) and `tests/test_config.py` tightened to a format assertion for that key in the same commit.
 
 ### Step 1.1 — `load_config` raises `KeyError` naming the offending key in both directions
 
@@ -137,7 +140,7 @@ Traceback (most recent call last):
 NotImplementedError: section 2 not built
 ```
 
-`SECTIONS` has keys 1 … 7 in order (`tests/test_run.py::test_sections_registered_in_order`). All seven sections raise `NotImplementedError` until built; section 1 gets its body at step 1.3.
+`SECTIONS` has keys 1 … 7 in order (`tests/test_run.py::test_sections_registered_in_order`). Sections 2 to 7 still raise `NotImplementedError`; section 1 got its body across steps 1.3, 1.4 and 1.7.
 
 ### Step 1.1 — `pytest -q` at the end of the step
 
@@ -171,6 +174,291 @@ The `sha256` column equals the SHA-256 of the parquet file bytes; the header lin
 $ pytest -q
 .........                                                                [100%]
 9 passed in 0.82s
+```
+
+### Step 1.3 — one client, seven series, one `pull_id`; manifest rows; `head(3)`/`tail(3)` of each month-end series; the NaN table
+
+`python -m regime.run --section 1 --pull` on 22 September (log below) pulled all seven `fred.market_series` through one `FredClient`; every line carries the same `pull_id 20260922T004835Z`, pinned as `fred.market_pull_id` in the same commit.
+
+```
+$ .venv/Scripts/python.exe -m regime.run --section 1 --pull   (step 1.3 state of run.py; market part)
+INFO regime: pulled market series DGS10 under pull_id 20260922T004835Z
+INFO regime: pulled market series DGS2 under pull_id 20260922T004835Z
+INFO regime: pulled market series DTWEXBGS under pull_id 20260922T004835Z
+INFO regime: pulled market series DTWEXM under pull_id 20260922T004835Z
+INFO regime: pulled market series DCOILWTICO under pull_id 20260922T004835Z
+INFO regime: pulled market series VIXCLS under pull_id 20260922T004835Z
+INFO regime: pulled market series T10YIE under pull_id 20260922T004835Z
+INFO regime: market pull_id 20260922T004835Z (pin as fred.market_pull_id in config.toml)
+INFO regime: fred.market_pull_id not pinned; no month-end series built
+```
+
+```
+$ python ev_1_3.py   (manifest rows for the pull; month_end_market(series, cfg.fred_market_pull_id, cfg) head/tail; NaN summary)
+manifest rows, pull_id 20260922T004835Z
+  source      series           pull_id   rows  first_date   last_date                                                            sha256                         pulled_at
+3   fred       DGS10  20260922T004835Z  16884  1962-01-02  2026-09-18  3bffe315b62b43fbf2b9de074ec4974a52d31a9b70100a226fa001b983384b9f  2026-09-22T00:48:35.858507+00:00
+4   fred        DGS2  20260922T004835Z  13124  1976-06-01  2026-09-18  bc42d4c0b4c50531926266fac9b6cb672395a7214434067d0597b92eb1c6aa73  2026-09-22T00:48:35.858507+00:00
+5   fred    DTWEXBGS  20260922T004835Z   5405  2006-01-02  2026-09-18  8d36f9816a29bf473458a6429209b4a9af182bf9cf8eda986e606b91c3336429  2026-09-22T00:48:35.858507+00:00
+6   fred      DTWEXM  20260922T004835Z  12261  1973-01-02  2019-12-31  95d20c4f20a751c59fab0c8fc23b0f484850065806175895cfb4cde4dc3e454e  2026-09-22T00:48:35.858507+00:00
+7   fred  DCOILWTICO  20260922T004835Z  10619  1986-01-02  2026-09-15  8a603915f8d28cdff8dac536f009e18cc4bab8fe9d5445a5d0c53ed7fcf3ac89  2026-09-22T00:48:35.858507+00:00
+8   fred      VIXCLS  20260922T004835Z   9579  1990-01-02  2026-09-18  b9b2aa504dd2a8df13cbd3e51d65719750db82f10dc331c79fd7c9529b49cf60  2026-09-22T00:48:35.858507+00:00
+9   fred      T10YIE  20260922T004835Z   6188  2003-01-02  2026-09-21  1b9e1f51bad8e4f25f7815bfc82e9af789d724da15df93b16f144dc952625184  2026-09-22T00:48:35.858507+00:00
+
+DGS10: head(3)
+date
+1990-01-31    8.43
+1990-02-28    8.51
+1990-03-31    8.65
+Freq: ME
+DGS10: tail(3)
+date
+2026-06-30    4.44
+2026-07-31    4.75
+2026-08-31    4.75
+Freq: ME
+
+DGS2: head(3)
+date
+1990-01-31    8.28
+1990-02-28    8.43
+1990-03-31    8.64
+Freq: ME
+DGS2: tail(3)
+date
+2026-06-30    4.14
+2026-07-31    4.28
+2026-08-31    4.34
+Freq: ME
+
+DTWEXBGS: head(3)
+date
+1990-01-31   NaN
+1990-02-28   NaN
+1990-03-31   NaN
+Freq: ME
+DTWEXBGS: tail(3)
+date
+2026-06-30    120.9248
+2026-07-31    119.7034
+2026-08-31    118.5679
+Freq: ME
+
+DTWEXM: head(3)
+date
+1990-01-31    92.3441
+1990-02-28    93.2150
+1990-03-31    94.4002
+Freq: ME
+DTWEXM: tail(3)
+date
+2019-10-31    91.7069
+2019-11-30    92.7133
+2019-12-31    90.8221
+Freq: ME
+
+DCOILWTICO: head(3)
+date
+1990-01-31    22.69
+1990-02-28    21.55
+1990-03-31    20.34
+Freq: ME
+DCOILWTICO: tail(3)
+date
+2026-06-30    70.56
+2026-07-31    86.16
+2026-08-31    87.03
+Freq: ME
+
+VIXCLS: head(3)
+date
+1990-01-31    25.36
+1990-02-28    21.99
+1990-03-31    19.73
+Freq: ME
+VIXCLS: tail(3)
+date
+2026-06-30    16.45
+2026-07-31    15.99
+2026-08-31    14.92
+Freq: ME
+
+T10YIE: head(3)
+date
+1990-01-31   NaN
+1990-02-28   NaN
+1990-03-31   NaN
+Freq: ME
+T10YIE: tail(3)
+date
+2026-06-30    2.24
+2026-07-31    2.28
+2026-08-31    2.31
+Freq: ME
+
+NaN summary
+    series  n_months      first       last  n_nan                                       nan_dates
+     DGS10       440 1990-01-31 2026-08-31      0                                               -
+      DGS2       440 1990-01-31 2026-08-31      0                                               -
+  DTWEXBGS       440 1990-01-31 2026-08-31    192 1990-01 .. 2005-12 (192 months, contiguous=yes)
+    DTWEXM       360 1990-01-31 2019-12-31      0                                               -
+DCOILWTICO       440 1990-01-31 2026-08-31      0                                               -
+    VIXCLS       440 1990-01-31 2026-08-31      0                                               -
+    T10YIE       440 1990-01-31 2026-08-31    156 1990-01 .. 2002-12 (156 months, contiguous=yes)
+```
+
+NaN dates against the plan's expectation: DTWEXBGS is NaN for the 192 month-ends 1990-01 to 2005-12 (its raw history starts 2006-01-02); T10YIE for the 156 month-ends 1990-01 to 2002-12 (raw history starts 2003-01-02); DTWEXM's raw history ends 2019-12-31, so `month_end_market` stops at 2019-12-31 (360 month-ends, none NaN) and the panel below shows it NaN from 2020-01 onward (79 rows) after reindexing; VIXCLS's raw history starts 1990-01-02, so 1990-01-31 has a value and the series has no NaN. DGS10, DGS2 and DCOILWTICO have no NaN month-end in 1990-01 to 2026-08 under the 10-day lookback.
+
+### Step 1.3 — `pytest -q` at the end of the step
+
+```
+$ pytest -q
+.....................                                                    [100%]
+21 passed in 0.88s
+```
+
+### Step 1.4 — one client, three vintage series; the pre-1995 check; distinct `realtime_start` counts; the 100,000-row cap
+
+`fredapi.get_series_all_releases` sends no `limit`, so FRED's default cap of 100,000 rows would truncate silently at the latest observation months rather than the earliest release dates; the row counts were checked against the cap as well as running the plan's pre-1995 check. All three pass both, so no `OPEN.md` item and the as-of tables were built.
+
+```
+$ (one FredClient; pull_vintages for each of cfg.fred_vintage_series; load_releases and report)
+CPIAUCSL: pull_id 20260922T005041Z rows 3362 distinct_realtime_start 669 earliest_realtime_start 1972-07-21 latest_realtime_start 2026-09-11 first_obs 1947-01-01 last_obs 2026-08-01 pre1995 True hit_100000_cap False
+INDPRO: pull_id 20260922T005041Z rows 39362 distinct_realtime_start 1223 earliest_realtime_start 1927-01-26 latest_realtime_start 2026-09-18 first_obs 1919-01-01 last_obs 2026-08-01 pre1995 True hit_100000_cap False
+UNRATE: pull_id 20260922T005041Z rows 2198 distinct_realtime_start 799 earliest_realtime_start 1960-03-15 latest_realtime_start 2026-09-04 first_obs 1948-01-01 last_obs 2026-08-01 pre1995 True hit_100000_cap False
+vintage pull_id 20260922T005041Z
+```
+
+### Step 1.4 — manifest rows; per series the release counts and earliest `realtime_start`; `build_asof` rows at 1995-01-31, 2008-12-31 and the last decision date; decision dates with no vintage; the t − 1 statistic with every failing date
+
+```
+$ .venv/Scripts/python.exe -m regime.run --section 1   (builds data/interim/asof_<series>_<pull_id>.parquet from the pinned pull)
+INFO regime: DGS10: 440 month-ends, 0 NaN
+INFO regime: DGS2: 440 month-ends, 0 NaN
+INFO regime: DTWEXBGS: 440 month-ends, 192 NaN
+INFO regime: DTWEXM: 360 month-ends, 0 NaN
+INFO regime: DCOILWTICO: 440 month-ends, 0 NaN
+INFO regime: VIXCLS: 440 month-ends, 0 NaN
+INFO regime: T10YIE: 440 month-ends, 156 NaN
+INFO regime: CPIAUCSL: as-of table 324060 rows, 440 decision dates
+INFO regime: INDPRO: as-of table 471900 rows, 440 decision dates
+INFO regime: UNRATE: as-of table 318780 rows, 440 decision dates
+```
+
+```
+$ python ev_1_4.py
+manifest rows, pull_id 20260922T005041Z
+    source    series           pull_id   rows  first_date   last_date                                                            sha256                         pulled_at
+10  alfred  CPIAUCSL  20260922T005041Z   3362  1947-01-01  2026-08-01  2f04bd59933cb1df0fe06cc414d9759dc49ca564700d6f82770b41bf8c0d3d53  2026-09-22T00:50:41.552786+00:00
+11  alfred    INDPRO  20260922T005041Z  39362  1919-01-01  2026-08-01  0b820268370f46dbafd1d3a35deea39c852345e796b89a26867bdf69981ff7e9  2026-09-22T00:50:41.552786+00:00
+12  alfred    UNRATE  20260922T005041Z   2198  1948-01-01  2026-08-01  f02e8ece72a49e4501a89da6e87c5922abf9fa537e9a2e888330e6b9fed68ec2  2026-09-22T00:50:41.552786+00:00
+
+=== CPIAUCSL: rows 3362, distinct realtime_start 669, earliest 1972-07-21, latest 2026-09-11, first obs 1947-01-01, last obs 2026-08-01
+first 3 raw release rows (earliest realtime_start):
+      date realtime_start  value
+1970-12-01     1972-07-21 119.03
+1971-01-01     1972-07-21 119.36
+1971-02-01     1972-07-21 119.65
+as-of table: 324060 rows, 440 decision dates 1990-01-31 .. 2026-08-31
+rows at decision date 1995-01-31, last three observation months with a value:
+decision_date  obs_month  value
+   1995-01-31 1994-10-31  149.5
+   1995-01-31 1994-11-30  149.9
+   1995-01-31 1994-12-31  150.2
+rows at decision date 2008-12-31, last three observation months with a value:
+decision_date  obs_month   value
+   2008-12-31 2008-09-30 218.813
+   2008-12-31 2008-10-31 216.710
+   2008-12-31 2008-11-30 213.060
+rows at decision date 2026-08-31, last three observation months with a value:
+decision_date  obs_month   value
+   2026-08-31 2026-05-31 333.979
+   2026-08-31 2026-06-30 332.568
+   2026-08-31 2026-07-31 332.813
+decision dates with no available vintage (all values NaN): 0 
+latest obs month == t-1 for 438 of 440 decision dates = 99.55%
+value counts of (t - latest obs month) in months:
+1    438
+2      2
+failing dates:
+decision_date latest_obs_month   expected
+   1996-01-31       1995-11-30 1995-12-31
+   2025-11-30       2025-09-30 2025-10-31
+
+=== INDPRO: rows 39362, distinct realtime_start 1223, earliest 1927-01-26, latest 2026-09-18, first obs 1919-01-01, last obs 2026-08-01
+first 3 raw release rows (earliest realtime_start):
+      date realtime_start  value
+1919-01-01     1927-01-26   83.0
+1919-02-01     1927-01-26   80.0
+1919-03-01     1927-01-26   77.0
+as-of table: 471900 rows, 440 decision dates 1990-01-31 .. 2026-08-31
+rows at decision date 1995-01-31, last three observation months with a value:
+decision_date  obs_month  value
+   1995-01-31 1994-10-31  119.4
+   1995-01-31 1994-11-30  120.3
+   1995-01-31 1994-12-31  121.4
+rows at decision date 2008-12-31, last three observation months with a value:
+decision_date  obs_month    value
+   2008-12-31 2008-09-30 105.2479
+   2008-12-31 2008-10-31 106.7786
+   2008-12-31 2008-11-30 106.1173
+rows at decision date 2026-08-31, last three observation months with a value:
+decision_date  obs_month    value
+   2026-08-31 2026-05-31 102.5099
+   2026-08-31 2026-06-30 102.7868
+   2026-08-31 2026-07-31 102.9939
+decision dates with no available vintage (all values NaN): 0 
+latest obs month == t-1 for 438 of 440 decision dates = 99.55%
+value counts of (t - latest obs month) in months:
+1    438
+2      1
+3      1
+failing dates:
+decision_date latest_obs_month   expected
+   2025-10-31       2025-08-31 2025-09-30
+   2025-11-30       2025-08-31 2025-10-31
+
+=== UNRATE: rows 2198, distinct realtime_start 799, earliest 1960-03-15, latest 2026-09-04, first obs 1948-01-01, last obs 2026-08-01
+first 3 raw release rows (earliest realtime_start):
+      date realtime_start  value
+1948-01-01     1960-03-15    3.5
+1948-02-01     1960-03-15    3.8
+1948-03-01     1960-03-15    4.0
+as-of table: 318780 rows, 440 decision dates 1990-01-31 .. 2026-08-31
+rows at decision date 1995-01-31, last three observation months with a value:
+decision_date  obs_month  value
+   1995-01-31 1994-10-31    5.7
+   1995-01-31 1994-11-30    5.6
+   1995-01-31 1994-12-31    5.4
+rows at decision date 2008-12-31, last three observation months with a value:
+decision_date  obs_month  value
+   2008-12-31 2008-09-30    6.1
+   2008-12-31 2008-10-31    6.5
+   2008-12-31 2008-11-30    6.7
+rows at decision date 2026-08-31, last three observation months with a value:
+decision_date  obs_month  value
+   2026-08-31 2026-05-31    4.3
+   2026-08-31 2026-06-30    4.2
+   2026-08-31 2026-07-31    4.1
+decision dates with no available vintage (all values NaN): 0 
+latest obs month == t-1 for 438 of 440 decision dates = 99.55%
+value counts of (t - latest obs month) in months:
+1    438
+2      2
+failing dates:
+decision_date latest_obs_month   expected
+   2025-10-31       2025-08-31 2025-09-30
+   2025-11-30       2025-09-30 2025-10-31
+```
+
+The `test_cpi_obs_month_is_t_minus_1` claim: 438 of 440 decision dates (99.55%) have the latest CPI observation month equal to t − 1. The two failing dates are both delayed releases: December 1995 CPI was published late because of the December 1995 to January 1996 federal shutdown (at 1996-01-31 the vintage ends at November 1995), and September 2025 CPI was published late because of the October to November 2025 shutdown (at 2025-11-30 the vintage ends at September 2025). INDPRO and UNRATE show the same 438/440 = 99.55%, with the failures on 2025-10-31 and 2025-11-30 (INDPRO's August 2025 value was the latest at both). No decision date has an empty vintage for any of the three series.
+
+### Step 1.4 — `pytest -q` at the end of the step
+
+```
+$ pytest -q
+.........................                                                [100%]
+25 passed in 0.88s
 ```
 
 ### Step 1.5 — manifest rows for `factors`, `ff5_zip`, `mom_zip`; `head(3)`, the 2010-01-31 row and `tail(3)` of the parsed frame; last month of each file; `diff_french`
@@ -243,7 +531,7 @@ diff_french(first, first) - first pull, nothing to compare against; the self-dif
 <empty DataFrame, columns: date, column, first_value, new_value>
 ```
 
-The momentum file (1195 rows from 1927-01) starts before the 5-factor file (757 rows from 1963-07); the inner join has 757 rows, 1963-07-31 to 2026-07-31. `diff_french` is empty on this, the first pull: there is no earlier snapshot, so the self-diff is shown to demonstrate the empty schema.
+The momentum file (1195 rows from 1927-01) starts before the 5-factor file (757 rows from 1963-07); the inner join has 757 rows, 1963-07-31 to 2026-07-31. `diff_french` is empty on this, the first pull: there is no earlier snapshot, so the self-diff is shown to demonstrate the empty schema. `run.py --pull` prints `diff_french(new, cfg.french_pull_id)` on any later pull.
 
 ### Step 1.5 — `pytest -q` at the end of the step
 
@@ -255,7 +543,7 @@ $ pytest -q
 
 ### Step 1.6 — the `project1: absent` log line and the returned frame's `dtypes`
 
-`PLAN.md` asks for the log line from `python -m regime.run --section 1`; section 1's body is owned by step 1.3 and still raises `NotImplementedError("section 1 not built")`, so the line was captured from a direct `load_project1()` call with the same logger configuration `run.py` uses:
+From the final `python -m regime.run --section 1` (full log under step 1.7): `INFO regime: project1: absent` followed by `INFO regime: project1: 0 rows`. The `dtypes` of the returned frame, from a direct call with the same logger configuration:
 
 ```
 $ .venv/Scripts/python.exe -c "import logging; logging.basicConfig(level=logging.INFO, format='%(levelname)s %(name)s: %(message)s'); from regime.data.project1 import load_project1; f = load_project1(); print('shape', f.shape); print(f.dtypes.to_string())"
@@ -276,80 +564,213 @@ $ pytest -q
 14 passed in 0.80s
 ```
 
-## Tests run
+### Step 1.7 — `python -m regime.run --section 1` end to end, and idempotence
 
-Final state of the repo (after the step 1.6 commit), from the repo root. `.venv` was created with `uv venv --python 3.11` and `uv pip install -e .` from `pyproject.toml`; no library outside `pyproject.toml` was installed and `uv.lock` was not created.
+```
+$ .venv/Scripts/python.exe -m regime.run --section 1
+INFO regime: DGS10: 440 month-ends, 0 NaN
+INFO regime: DGS2: 440 month-ends, 0 NaN
+INFO regime: DTWEXBGS: 440 month-ends, 192 NaN
+INFO regime: DTWEXM: 360 month-ends, 0 NaN
+INFO regime: DCOILWTICO: 440 month-ends, 0 NaN
+INFO regime: VIXCLS: 440 month-ends, 0 NaN
+INFO regime: T10YIE: 440 month-ends, 156 NaN
+INFO regime: CPIAUCSL: as-of table 324060 rows, 440 decision dates
+INFO regime: INDPRO: as-of table 471900 rows, 440 decision dates
+INFO regime: UNRATE: as-of table 318780 rows, 440 decision dates
+INFO regime: project1: absent
+INFO regime: project1: 0 rows
+INFO regime: as-of panel written to data/processed/asof_panel.parquet: 439 rows x 16 columns
+```
+
+```
+$ (sha256 of data/processed/asof_panel.parquet after two consecutive runs)
+panel sha256 run1=bac7564215c3d013 run2=bac7564215c3d013 identical=yes
+```
+
+### Step 1.7 — `panel.head(3)`, the rows for 2004-12-31 and `sample_end`, the (column, n_nan, first_valid, last_valid) table, NaN decision dates from `features_from`, and `cpi_obs_month − t`
+
+```
+$ python ev_1_7.py
+panel: 439 rows x 16 columns, index 1990-01-31 .. 2026-07-31, name='date'
+
+head(3)
+            dgs10  dgs2  dtwexbgs   dtwexm    wti    vix  t10yie  cpi_m  cpi_m3  indpro_m  indpro_m12  unrate_m  unrate_m12 cpi_obs_month indpro_obs_month unrate_obs_month
+date                                                                                                                                                                       
+1990-01-31   8.43  8.28       NaN  92.3441  22.69  25.36     NaN  126.3   124.7     142.8       140.4       5.3         5.3    1989-12-31       1989-12-31       1989-12-31
+1990-02-28   8.51  8.43       NaN  93.2150  21.55  21.99     NaN  127.7   125.4     140.9       140.8       5.3         5.4    1990-01-31       1990-01-31       1990-01-31
+1990-03-31   8.65  8.64       NaN  94.4002  20.34  19.73     NaN  128.3   125.8     141.8       140.5       5.3         5.2    1990-02-28       1990-02-28       1990-02-28
+
+rows for 2004-12-31 and sample.end 2026-07-31
+            dgs10  dgs2  dtwexbgs   dtwexm    wti    vix  t10yie    cpi_m   cpi_m3  indpro_m  indpro_m12  unrate_m  unrate_m12 cpi_obs_month indpro_obs_month unrate_obs_month
+date                                                                                                                                                                          
+2004-12-31   4.24  3.08       NaN  79.4917  43.36  13.29    2.56  191.200  189.400  116.9560    112.6570       5.4         5.9    2004-11-30       2004-11-30       2004-11-30
+2026-07-31   4.75  4.28  119.7034      NaN  86.16  15.99    2.28  332.568  330.293  102.6395    101.4785       4.2         4.1    2026-06-30       2026-06-30       2026-06-30
+
+(column, n_nan, first_valid, last_valid)
+          column  n_nan first_valid last_valid
+           dgs10      0  1990-01-31 2026-07-31
+            dgs2      0  1990-01-31 2026-07-31
+        dtwexbgs    192  2006-01-31 2026-07-31
+          dtwexm     79  1990-01-31 2019-12-31
+             wti      0  1990-01-31 2026-07-31
+             vix      0  1990-01-31 2026-07-31
+          t10yie    156  2003-01-31 2026-07-31
+           cpi_m      0  1990-01-31 2026-07-31
+          cpi_m3      1  1990-01-31 2026-07-31
+        indpro_m      0  1990-01-31 2026-07-31
+      indpro_m12      0  1990-01-31 2026-07-31
+        unrate_m      0  1990-01-31 2026-07-31
+      unrate_m12      0  1990-01-31 2026-07-31
+   cpi_obs_month      0  1990-01-31 2026-07-31
+indpro_obs_month      0  1990-01-31 2026-07-31
+unrate_obs_month      0  1990-01-31 2026-07-31
+
+decision dates from 1991-01-31 with NaN in any of ['dgs10', 'dgs2', 'wti', 'vix', 'cpi_m', 'cpi_m3', 'indpro_m', 'indpro_m12']: 1
+            dgs10  dgs2    wti    vix    cpi_m  cpi_m3  indpro_m  indpro_m12
+date                                                                        
+2026-02-28   3.97  3.38  66.96  19.86  326.588     NaN  102.3412    100.0647
+
+cpi_obs_month - t in months, value counts
+-2      2
+-1    437
+dates where cpi_obs_month - t != -1:
+              cpi_m cpi_obs_month
+date                             
+1996-01-31  153.700    1995-11-30
+2025-11-30  324.368    2025-09-30
+
+indpro_obs_month - t in months, value counts
+-3      1
+-2      1
+-1    437
+
+unrate_obs_month - t in months, value counts
+-2      2
+-1    437
+```
+
+The panel has 439 rows (1990-01-31 to 2026-07-31 = `sample.end`), against the 440 month-ends the market series and as-of tables carry to 2026-08-31: the French data is the binding constraint (convention 10). Column NaN counts: `dtwexbgs` 192 (before 2006-01), `dtwexm` 79 (after 2019-12), `t10yie` 156 (before 2003-01), `cpi_m3` 1; every other column has none.
+
+**The single NaN in the eight core columns from `features_from` onward** is `cpi_m3` at 2026-02-28. At that decision date the latest CPI month in the vintage is January 2026 and `cpi_m3` reads October 2025 from the same vintage. October 2025 CPI was never published (the 2025 shutdown); FRED's only release row for that observation month carries a missing value:
+
+```
+CPIAUCSL as-of 2026-02-28, observation months from 2025-08:
+decision_date  obs_month   value
+   2026-02-28 2025-08-31 323.291
+   2026-02-28 2025-09-30 324.245
+   2026-02-28 2025-10-31     NaN
+   2026-02-28 2025-11-30 325.063
+   2026-02-28 2025-12-31 326.031
+   2026-02-28 2026-01-31 326.588
+   2026-02-28 2026-02-28     NaN
+
+raw releases for observation month 2025-10-01:
+      date realtime_start  value
+2025-10-01     2025-12-18    NaN
+```
+
+This is the as-of rule working as specified, not a data-handling fault: the value that did not exist at t is NaN at t. It will drop that one row from `cpi_3m_ann` in section 2, which is the intended treatment (`dropped_rows.csv`).
+
+`cpi_obs_month − t` is −1 month for 437 of 439 panel rows and −2 for the two shutdown dates listed above (1996-01-31, 2025-11-30). `indpro_obs_month − t` and `unrate_obs_month − t` are printed the same way at the end of the block.
+
+### Step 1.7 — `pytest -q` at the end of the step
 
 ```
 $ pytest -q
-..............                                                           [100%]
-14 passed in 0.78s
+............................                                             [100%]
+28 passed in 2.59s
 ```
 
-The fourteen tests: `tests/test_config.py::test_config_keys_round_trip`, `tests/test_config.py::test_config_is_frozen_and_typed`, `tests/test_run.py::test_sections_registered_in_order`, `tests/test_run.py::test_unbuilt_section_raises`, `tests/test_fred_client.py::test_missing_api_key_raises`, `tests/test_fred_client.py::test_pull_id_format`, `tests/test_fred_client.py::test_write_raw_never_overwrites`, `tests/test_fred_client.py::test_manifest_appends`, `tests/test_fred_client.py::test_sha256_of_overrides_parquet_digest`, `tests/test_french.py::test_parse_stops_at_first_blank_line`, `tests/test_french.py::test_2010_01_row_matches_site`, `tests/test_french.py::test_sample_end_is_momentum_last_month`, `tests/test_project1.py::test_absent_returns_empty_schema_and_logs`, `tests/test_project1.py::test_present_round_trip`. `test_unbuilt_section_raises` and `test_sha256_of_overrides_parquet_digest` are additional to the ones `PLAN.md` names; every named one is present. No test touches the network; the French tests read the committed pinned files.
+## Tests run
+
+Final state of the repo (after the step 1.7 commit), from the repo root. `.venv` was created with `uv venv --python 3.11` and `uv pip install -e .` from `pyproject.toml`; no library outside `pyproject.toml` was installed and `uv.lock` was not created.
+
+```
+$ pytest -q
+............................                                             [100%]
+28 passed in 2.74s
+```
+
+The 28 tests, by file: `test_config.py` (2: `test_config_keys_round_trip`, `test_config_is_frozen_and_typed`), `test_run.py` (2: `test_sections_registered_in_order`, `test_unbuilt_section_raises`), `test_fred_client.py` (5: `test_missing_api_key_raises`, `test_pull_id_format`, `test_write_raw_never_overwrites`, `test_manifest_appends`, `test_sha256_of_overrides_parquet_digest`), `test_market.py` (7: `test_lookback_rule` × 5 cases, `test_no_future_observation`, `test_index_runs_from_start_to_last_month_end`), `test_alfred.py` (4: `test_pinned_vintages_start_before_1995`, `test_value_used_has_realtime_start_le_t`, `test_no_release_before_t_gives_all_nan`, `test_cpi_obs_month_is_t_minus_1`), `test_french.py` (3: `test_parse_stops_at_first_blank_line`, `test_2010_01_row_matches_site`, `test_sample_end_is_momentum_last_month`), `test_project1.py` (2: `test_absent_returns_empty_schema_and_logs`, `test_present_round_trip`), `test_asof_panel.py` (3: `test_schema_matches_section_10`, `test_planted_future_market_value_is_ignored`, `test_lags_come_from_same_vintage`). Every test `PLAN.md` names is present; `test_unbuilt_section_raises`, `test_sha256_of_overrides_parquet_digest`, the fifth `test_lookback_rule` case (`latest_wins`), `test_index_runs_from_start_to_last_month_end` and `test_no_release_before_t_gives_all_nan` are additional. No test touches the network; tests that need pulled data read the committed pinned files and would fail, not skip, if absent.
+
+Two test-side mistakes were made and fixed before their step's commit, recorded for completeness: in `test_value_used_has_realtime_start_le_t` an `iterrows` loop upcast a float NaN to `NaT` (pandas row upcasting on a row of two datetimes and a NaN), replaced by `itertuples`; in `test_planted_future_market_value_is_ignored` an extra assertion of mine expected the planted 1e6 to surface at a later month-end, which cannot happen in a daily series with a value every day, and was replaced by asserting the clean panel never contains it. Neither touched the code under test.
 
 ## Runtime per step
 
 | step | wall-clock | machine | notes |
 |---|---|---|---|
-| env | ~3:00 | Windows 11 Home, 16 GB, Python 3.11.15 via uv | `.venv` creation and `uv pip install -e .`, before step 1.1 |
-| 1.1 | 1:07 | same | 14:13:22Z to 14:14:29Z |
-| 1.2 | 1:40 | same | 14:14:29Z to 14:16:09Z |
-| 1.5 | 1:26 | same, 18 Sep | 08:30:09Z to 08:31:35Z, including the two downloads |
-| 1.6 | 0:36 | same, 18 Sep | 08:31:35Z to 08:32:11Z |
-| 1.3, 1.4, 1.7 | — | | not started: `FRED_API_KEY` not set |
+| env | ~3:00 | Windows 11 Home, 16 GB, Python 3.11.15 via uv | `.venv` creation and `uv pip install -e .`, before step 1.1 (17 Sep) |
+| 1.1 | 1:07 | same | 17 Sep 14:13:22Z to 14:14:29Z |
+| 1.2 | 0:32 | same | 17 Sep 14:15:37Z to 14:16:09Z |
+| 1.5 | 1:39 | same | 18 Sep 08:29:56Z to 08:31:35Z, including the two downloads |
+| 1.6 | 0:15 | same | 18 Sep 08:31:56Z to 08:32:11Z |
+| 1.3 | 1:37 | same | 22 Sep 00:47:52Z to 00:49:29Z, including the seven FRED pulls |
+| 1.4 | ~9:00 active | same | started 22 Sep 00:50:18Z; the three ALFRED pulls finished by 00:50:53Z; the session then sat idle between turns until ~09:52Z (machine clock; commit 10:00:51Z). Active work — tests, as-of build, evidence, commit — was about 9 minutes. The clock span (9 h 10 m) is an idle gap, not runtime. |
+| 1.7 | 1:32 | same | 22 Sep 10:01:25Z to 10:02:57Z |
 
-No step approached the 20-minute threshold (`run.step_timeout_minutes`).
+No step's active time approached the 20-minute threshold (`run.step_timeout_minutes`). `python -m regime.run --section 1` without `--pull` takes about 20 seconds.
 
 ## Not verified
 
-- `FredClient` against the live FRED API: constructing `fredapi.Fred` makes no request, so `test_pull_id_format` passes with a dummy key; nothing proves the key or the endpoint.
-- `pull_market`, `pull_vintages`, `month_end_market`, `build_asof`, `build_asof_panel`: not built.
-- `fred.market_pull_id`, `fred.vintage_pull_id`: still `""`; the two-phase assertion in `tests/test_config.py` is tightened for `french_pull_id` and `sample_end` (step 1.5) and still loose for the two FRED keys.
+- `parse_french_csv` on a CSV whose monthly block is not the first block: both live files have the monthly block first and the parser takes the first comma-led header line; a differently ordered file would be parsed wrongly and is not guarded against.
 - `diff_french` against a genuinely different snapshot: only the empty self-diff was exercised; no second pull exists yet.
-- `parse_french_csv` on a CSV whose monthly block is not the first block: both live files have the monthly block first, and the parser takes the first comma-led header line, so a differently ordered file would be parsed wrongly and is not guarded against.
-- The `project1: absent` line from `python -m regime.run --section 1` itself: section 1 is not built until step 1.3.
-- The pre-1995 `realtime_start` check for the vintage series (step 1.4): not run.
-- `python -m regime.run --section 1`: raises `NotImplementedError("section 1 not built")` by design until step 1.3; not exercised beyond that.
 - `write_raw` with a frame that has no `date` column writes blank `first_date`/`last_date`; every frame the plan specifies has a `date` column, so the branch is untested.
-- Line endings: the new files were written with LF and git reported it will convert them to CRLF on checkout (`core.autocrlf` is on in this checkout, as it was for session 0). Not verified that this matters to anything.
+- `asof_from_releases` when a release row carries a missing value (FRED `.`) for a month that had an earlier non-missing release: the pivot-and-forward-fill implementation would carry the earlier value forward past the missing release. The one such row in the pinned data (CPIAUCSL, October 2025, released 2025-12-18 as missing) has no earlier release, so it is NaN as required; no case of a missing release after a valid one was found or tested.
+- `month_end_market` for a series whose raw history ends before `sample.end` (DTWEXM): the series simply stops at its last month-end; the panel's reindex supplies the NaN. Tested only via the live data (`dtwexm` 79 NaN from 2020-01), not by a synthetic test.
+- The market lookback rule against the live series was checked only through the NaN pattern (no NaN in DGS10, DGS2, DCOILWTICO, VIXCLS; the expected gaps in DTWEXBGS and T10YIE); no month-end value was checked by hand against the FRED website.
+- `test_cpi_obs_month_is_t_minus_1` reads the as-of parquet in `data/interim/` if present and rebuilds it otherwise; a stale interim file from a different pull is not detected (the file name carries the pinned `pull_id`, so only a file with the same id could be stale).
+- `run.py --pull` pulls market and vintage series through two `FredClient`s (two `pull_id`s, matching the two config keys) and French through `pull_french`; the full `--pull` path was exercised only in pieces (market at step 1.3, vintages at 1.4 by direct calls, French at 1.5), never as one `--pull` run end to end after 1.7.
+- Line endings: files were written with LF and git converts to CRLF on checkout (`core.autocrlf` is on in this checkout, as it was for session 0). Not verified that this matters to anything.
 
 ## Open questions
 
-None appended to `decisions/OPEN.md`. The missing key is an environment fact, not a design choice, so it is reported here rather than as an `OPEN.md` item.
+None appended to `decisions/OPEN.md`. The 100,000-row cap of `get_series_all_releases` was checked and not hit (max 39,362 rows, INDPRO), so the plan's truncation contingency did not arise.
 
 ## Files changed
 
 Step 1.1 (`ff81cbf`):
 - added `regime/__init__.py`, `regime/config.py`, `regime/run.py`
 - added docstring-only modules `regime/data/__init__.py`, `regime/data/fred.py`, `regime/data/alfred.py`, `regime/data/french.py`, `regime/data/project1.py`, `regime/data/asof.py`, `regime/features.py`, `regime/models/__init__.py`, `regime/models/rules.py`, `regime/models/hmm_numpy.py`, `regime/models/hmm.py`, `regime/models/gmm.py`, `regime/models/anchor.py`, `regime/conditional.py`, `regime/strategy.py`, `regime/charts.py`, `regime/tables.py`
-- added `tests/test_config.py`, `tests/test_run.py`
-- deleted `tests/test_placeholder.py`
+- added `tests/test_config.py`, `tests/test_run.py`; deleted `tests/test_placeholder.py`
 
 Step 1.2 (`1fb67ac`):
-- modified `regime/data/fred.py` (docstring only → `FredClient`, `new_pull_id`, `raw_path`, `append_manifest_row`, `write_raw`)
-- added `tests/test_fred_client.py`
+- modified `regime/data/fred.py` (`FredClient`, `new_pull_id`, `raw_path`, `append_manifest_row`, `write_raw`); added `tests/test_fred_client.py`
 
 Step 1.5 (`ff9e132`):
-- modified `regime/data/french.py` (docstring only → `parse_french_csv`, `join_french`, `pull_french`, `load_french`, `momentum_frame`, `sample_end`, `diff_french`)
-- added `tests/test_french.py`; modified `tests/test_config.py` (tightened `french_pull_id` and `sample_end`)
-- modified `config.toml` (`french.pull_id = "20260918T083009Z"`, `sample.end = "2026-07-31"`)
-- added `data/raw/french/ff5_20260918T083009Z.zip`, `data/raw/french/mom_20260918T083009Z.zip`, `data/raw/french/factors_20260918T083009Z.parquet`, `data/raw/manifest.csv` (three rows)
+- modified `regime/data/french.py` (`parse_french_csv`, `join_french`, `pull_french`, `load_french`, `momentum_frame`, `sample_end`, `diff_french`)
+- added `tests/test_french.py`; modified `tests/test_config.py` (tightened `french_pull_id`, `sample_end`)
+- modified `config.toml` (`french.pull_id`, `sample.end`)
+- added `data/raw/french/ff5_20260918T083009Z.zip`, `data/raw/french/mom_20260918T083009Z.zip`, `data/raw/french/factors_20260918T083009Z.parquet`, `data/raw/manifest.csv` (3 rows)
 
 Step 1.6 (`61ac025`):
-- modified `regime/data/project1.py` (docstring only → `load_project1`)
-- added `tests/test_project1.py`
+- modified `regime/data/project1.py` (`load_project1`); added `tests/test_project1.py`
 
-This review: `review/section_1.md` (first written after step 1.2, rewritten after step 1.6).
+Step 1.3 (`89b9992`):
+- modified `regime/data/fred.py` (`FredClient.pull_market`, `month_end_from_daily`, `month_end_market`), `regime/run.py` (`section_1`: market pulls with `--pull`, month-end series)
+- added `tests/test_market.py`; modified `tests/test_config.py` (tightened `fred_market_pull_id`)
+- modified `config.toml` (`fred.market_pull_id`)
+- added `data/raw/fred/{DGS10,DGS2,DTWEXBGS,DTWEXM,DCOILWTICO,VIXCLS,T10YIE}_20260922T004835Z.parquet`; `data/raw/manifest.csv` +7 rows
 
-Not committed and ignored: `.venv/` (`.gitignore`). Untracked and untouched: `Project Outline/` (present before this session).
+Step 1.4 (`c468292`):
+- modified `regime/data/fred.py` (`FredClient.pull_vintages`), `regime/data/alfred.py` (`asof_from_releases`, `load_releases`, `asof_path`, `build_asof`), `regime/run.py` (`section_1`: vintage pulls with the pre-1995 check, as-of tables)
+- added `tests/test_alfred.py`; modified `tests/test_config.py` (tightened `fred_vintage_pull_id`)
+- modified `config.toml` (`fred.vintage_pull_id`)
+- added `data/raw/alfred/{CPIAUCSL,INDPRO,UNRATE}_20260922T005041Z.parquet`; `data/raw/manifest.csv` +3 rows
+
+Step 1.7 (`327b8db`):
+- modified `regime/data/asof.py` (`assemble_panel`, `build_asof_panel`), `regime/run.py` (`section_1`: French `--pull` with `diff_french`, `load_project1`, panel write)
+- added `tests/test_asof_panel.py`
+
+Review: `review/section_1.md` (this file; earlier versions at `7cbe025` and `24322a6`).
+
+Generated and not committed (ignored): `data/interim/asof_{CPIAUCSL,INDPRO,UNRATE}_20260922T005041Z.parquet`, `data/processed/asof_panel.parquet`, `.venv/`. Untracked and untouched: `Project Outline/` (present before session 1).
 
 ## Reviewer reads
 
-1. `regime/config.py` — the 86 field names against `config.toml`, the `float` coercion of int-valued TOML numbers, and that `KeyError` names the key in both directions.
-2. `tests/test_config.py` — the two-phase comment on the `*_pull_id` / `sample_end` assertion; it is at the loose phase and steps 1.3 to 1.5 must each tighten one key in the same commit.
-3. `regime/data/fred.py` — `pull_id` stamped once in `__init__`; `write_raw` raises `FileExistsError` before touching anything; the manifest is opened in append mode only; `sha256_of` overrides the parquet digest.
-4. `regime/data/french.py` — `parse_french_csv` stops at the first blank line; `UMD` comes from `Mom`; the two zip manifest rows carry the zip digests; `sample_end` reads the momentum file.
-5. `config.toml` lines 20 and 39 against `data/raw/manifest.csv` — the pinned `french.pull_id` and `sample.end` match the pull.
-6. `regime/run.py` — the `SECTIONS` registry and that `--pull` reaches only section 1.
-7. The first paragraph of this file — what is blocked and the API key needed to finish.
+1. `regime/data/alfred.py` — `asof_from_releases`: the pivot on `realtime_start` × `obs_month`, the forward fill down release dates, and `searchsorted(t, side="right") - 1` selecting the last release date ≤ t; the "no fallback to the current vintage" branch.
+2. `regime/data/asof.py` — `_revised_columns`: m is the latest non-NaN month in the as-of-t vintage and the lag is read from the same vintage by `MonthEnd(lag)`; the column order against section 10.
+3. `regime/data/fred.py` — `month_end_from_daily`: the window `t − lookback_days ≤ date ≤ t`, and that `pull_market`/`pull_vintages` share the client's single `pull_id`.
+4. `tests/test_asof_panel.py` and `tests/test_alfred.py` — that the planted-future and same-vintage tests exercise the rule (the value encodes its own `realtime_start`).
+5. `config.toml` lines 20, 32, 33, 39 against `data/raw/manifest.csv` — the four pinned keys match the pulls.
+6. This file, "Step 1.7" — the single `cpi_m3` NaN (October 2025 CPI never published) and the two shutdown dates in the t − 1 statistic, both consequences of the as-of rule rather than faults.
