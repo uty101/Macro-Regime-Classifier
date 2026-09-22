@@ -34,7 +34,10 @@ def section_1(cfg: Config, pull: bool = False) -> None:
     import pandas as pd
 
     from regime.data.alfred import build_asof, load_releases
+    from regime.data.asof import build_asof_panel
     from regime.data.fred import FredClient, month_end_market
+    from regime.data.french import diff_french, pull_french
+    from regime.data.project1 import load_project1
 
     log = logging.getLogger("regime")
     if pull:
@@ -76,6 +79,23 @@ def section_1(cfg: Config, pull: bool = False) -> None:
             log.info("%s: as-of table %d rows, %d decision dates", series_id, len(table), table["decision_date"].nunique())
     else:
         log.info("fred.vintage_pull_id not pinned; no as-of tables built")
+
+    if pull:
+        new_french = pull_french(cfg)
+        log.info("french pull_id %s (first snapshot pinned as french.pull_id is %s)", new_french, cfg.french_pull_id)
+        if cfg.french_pull_id and new_french != cfg.french_pull_id:
+            diff = diff_french(new_french, cfg.french_pull_id, cfg)
+            log.info("diff_french(%s, %s): %d differing cells", new_french, cfg.french_pull_id, len(diff))
+            print(diff.to_string() if len(diff) else "<no differences over common dates>")
+
+    project1 = load_project1()
+    log.info("project1: %d rows", len(project1))
+
+    if market_pull_id and vintage_pull_id:
+        panel = build_asof_panel(cfg)
+        log.info("as-of panel written to %s: %d rows x %d columns", cfg.outputs_asof_panel, *panel.shape)
+    else:
+        log.info("as-of panel not built: market_pull_id or vintage_pull_id not pinned")
 
 
 section_2 = _not_built(2)
