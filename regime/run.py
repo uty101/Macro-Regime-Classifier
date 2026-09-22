@@ -329,7 +329,7 @@ def project1_conditional(cfg: Config, labels: pd.DataFrame):
 
     import pandas as pd
 
-    from regime.conditional import bootstrap_conditional
+    from regime.conditional import add_excess_sharpe, bootstrap_conditional, unconditional_stats
     from regime.data.project1 import load_project1
 
     log = logging.getLogger("regime")
@@ -344,6 +344,7 @@ def project1_conditional(cfg: Config, labels: pd.DataFrame):
     p1_cfg = dataclasses.replace(cfg, strategy_factors=tuple(wide.columns))
 
     stats, _differences, _nan = bootstrap_conditional(labels, wide, p1_cfg, source="project1")
+    stats = add_excess_sharpe(stats, unconditional_stats(labels, wide, p1_cfg))
     tables = _Path(cfg.outputs_tables_dir)
     tables.mkdir(parents=True, exist_ok=True)
     stats.to_csv(tables / "conditional_stats_project1.csv", index=False)
@@ -363,9 +364,10 @@ def section_4(cfg: Config, pull: bool = False) -> None:
     import pandas as pd
 
     from regime.conditional import (
+        add_excess_sharpe,
         bootstrap_conditional,
+        bootstrap_refit_split,
         conditional_stats,
-        conditional_stats_refit_split,
         filtered_smoothed_gap,
         join_next_return,
         unassigned_dates,
@@ -398,14 +400,29 @@ def section_4(cfg: Config, pull: bool = False) -> None:
                  f" ({', '.join(d.date().isoformat() for d in missing)})" if len(missing) else "")
         log.info("conditional_stats_%s.csv written: %d rows", name, len(stats))
 
+    # The pooled table is written first: every conditional table below carries
+    # excess_sharpe beside sharpe, and that needs the unconditional level of
+    # each factor over the identical dates (reviewer answer to section 4 Q3,
+    # decisions/section_4_review.md).
+    pooled = unconditional_stats(sources[cfg.strategy_headline_source], factors, cfg)
+    pooled.to_csv(tables / "unconditional_stats.csv", index=False)
+    log.info("unconditional_stats.csv written:\n%s", pooled.to_string(index=False))
+
     refits = refit_dates(cfg)
-    split = conditional_stats_refit_split(sources["hmm_filtered"], factors, refits, cfg)
+    split, split_diff = bootstrap_refit_split(sources["hmm_filtered"], factors, refits, cfg)
     split.to_csv(tables / "conditional_stats_refit_split.csv", index=False)
-    log.info("conditional_stats_refit_split.csv written: %d rows (hmm_filtered only, no bootstrap)", len(split))
+    split_diff.to_csv(tables / "conditional_refit_split_differences.csv", index=False)
+    log.info(
+        "conditional_stats_refit_split.csv written: %d rows (hmm_filtered only), %d exclude zero; "
+        "conditional_refit_split_differences.csv: %d rows, %d exclude zero",
+        len(split), int(split["excludes_zero"].sum()),
+        len(split_diff), int(split_diff["excludes_zero"].sum()),
+    )
 
     nan_counts = []
     for name in cfg.strategy_label_sources:                                                       # 4.3
         stats, differences, nan_rows = bootstrap_conditional(sources[name], factors, cfg, source=name)
+        stats = add_excess_sharpe(stats, pooled)
         stats.to_csv(tables / f"conditional_stats_{name}.csv", index=False)
         differences.to_csv(tables / f"conditional_differences_{name}.csv", index=False)
         nan_counts.append(nan_rows)
@@ -421,10 +438,6 @@ def section_4(cfg: Config, pull: bool = False) -> None:
              len(nan_table), float(nan_table["share_nan"].max()), len(loud))
     if len(loud):
         log.warning("cells with over 5%% NaN replications:\n%s", loud.to_string(index=False))
-
-    pooled = unconditional_stats(sources[cfg.strategy_headline_source], factors, cfg)
-    pooled.to_csv(tables / "unconditional_stats.csv", index=False)
-    log.info("unconditional_stats.csv written:\n%s", pooled.to_string(index=False))
 
     gap = filtered_smoothed_gap(sources["hmm_filtered"], sources["hmm_smoothed"], factors, cfg)  # 4.4
     gap.to_csv(tables / "filtered_smoothed_gap.csv", index=False)

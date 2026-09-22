@@ -92,7 +92,10 @@ def test_conditional_join_runs_when_present(tmp_path):
 
     assert stats is not None
     assert set(stats["factor"]) == {"VALUE", "QUALITY"}
+    # conditional_stats_project1.csv matches the conditional_stats_<source> pattern,
+    # so it carries excess_sharpe too, against the project 1 factors' own pooled table.
     assert list(stats.columns) == [
-        "factor", "state", "n", "ann_mean", "ann_std", "sharpe", "sharpe_p05", "sharpe_p95", "excludes_zero",
+        "factor", "state", "n", "ann_mean", "ann_std", "sharpe", "excess_sharpe",
+        "sharpe_p05", "sharpe_p95", "excludes_zero",
     ]
     assert (tmp_path / "tables" / "conditional_stats_project1.csv").exists()

@@ -151,7 +151,11 @@ def run_started_on_refit(labels: pd.DataFrame, refits: Sequence[pd.Timestamp]) -
 def conditional_stats_refit_split(
     labels: pd.DataFrame, factors: pd.DataFrame, refits: Sequence[pd.Timestamp], cfg: Config
 ) -> pd.DataFrame:
-    """Conditional statistics by factor, state and ``run_started_on_refit``. Information only, no bootstrap."""
+    """Conditional statistics by factor, state and ``run_started_on_refit``, on the observed sample.
+
+    The intervals come from ``bootstrap_refit_split``, which calls this for the
+    point estimates (reviewer answer to section 4 Q2).
+    """
     joined = join_next_return(labels, factors, cfg)
     flag = run_started_on_refit(labels, refits).reindex(joined.index)
     use = joined.loc[joined["assigned"]]
@@ -437,3 +441,139 @@ def filtered_smoothed_gap(
         for si, state in enumerate(states):
             rows.append((factor, state, observed[si, fi], low[si, fi], high[si, fi]))
     return pd.DataFrame(rows, columns=list(GAP_COLUMNS))
+
+
+EXCESS_AFTER = "sharpe"
+
+
+def add_excess_sharpe(stats: pd.DataFrame, pooled: pd.DataFrame) -> pd.DataFrame:
+    """``stats`` with ``excess_sharpe`` inserted immediately after ``sharpe``.
+
+    ``excess_sharpe`` is the conditional Sharpe minus that factor's
+    unconditional Sharpe from ``unconditional_stats``, over the identical
+    out-of-sample dates. Reviewer answer to section 4 Q3
+    (``decisions/section_4_review.md``): Mkt-RF pays 0.668 unconditionally over
+    this window, so a conditional 0.712 is a level and not a finding, and the
+    two have to be readable side by side.
+
+    Only the ``conditional_stats_<source>`` tables take this column. A
+    difference of two conditional Sharpes already nets the unconditional level
+    out, so ``conditional_differences_<source>`` keeps its columns unchanged.
+    """
+    level = dict(zip(pooled["factor"], pooled["sharpe"]))
+    missing = sorted(set(stats["factor"]) - set(level))
+    if missing:
+        raise KeyError(f"unconditional_stats has no row for {missing}")
+    out = stats.copy()
+    excess = out["sharpe"] - out["factor"].map(level)
+    out.insert(out.columns.get_loc(EXCESS_AFTER) + 1, "excess_sharpe", excess)
+    return out
+
+
+REFIT_SPLIT_CI_COLUMNS = (
+    "factor", "state", "run_started_on_refit", "n", "ann_mean", "ann_std", "sharpe",
+    "sharpe_p05", "sharpe_p95", "excludes_zero",
+)
+REFIT_SPLIT_DIFF_COLUMNS = (
+    "factor", "state", "sharpe_diff", "diff_p05", "diff_p95", "excludes_zero", "n_false", "n_true",
+)
+FLAG_VALUES = (False, True)
+
+
+def _sharpe_by_state_and_flag(
+    label: np.ndarray, flag: np.ndarray, returns: np.ndarray, states: Sequence[int], ddof: int
+) -> np.ndarray:
+    """(n_states, 2, n_factors) annualised Sharpes; axis 1 is ``run_started_on_refit`` False then True.
+
+    A half with fewer than two rows has no sample standard deviation and its
+    Sharpe is NaN for that replication, exactly as ``_sharpe_by_state`` treats
+    a thin state.
+    """
+    out = np.full((len(states), len(FLAG_VALUES), returns.shape[1]), np.nan)
+    for i, state in enumerate(states):
+        for j, value in enumerate(FLAG_VALUES):
+            rows = returns[(label == state) & (flag > 0.5 if value else flag <= 0.5)]
+            if len(rows) < 2:
+                continue
+            mean, sd = rows.mean(axis=0), rows.std(axis=0, ddof=ddof)
+            safe = np.where(sd > 0, sd, 1.0)
+            out[i, j] = np.where(sd > 0, mean / safe * SQRT_ANNUALISE, np.nan)
+    return out
+
+
+def bootstrap_refit_split(
+    labels: pd.DataFrame, factors: pd.DataFrame, refits: Sequence[pd.Timestamp], cfg: Config
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """``(refit_split_with_ci, refit_split_differences)`` for one label source.
+
+    Reviewer answer to section 4 Q2 (``decisions/section_4_review.md``): the
+    split of the out-of-sample dates by whether the filtered label run
+    containing them began on a refit date is large enough — RMW state 0 splits
+    3.228 against 0.263 — that reporting it without intervals says only that it
+    is large.
+
+    Both halves travel in the *same* bootstrap row: the flag is a column of the
+    resampled array beside the label and the six returns. So each replication's
+    difference is a like-for-like comparison on one resampled history, never a
+    difference between two independently resampled marginals — the same
+    construction as the pairwise state differences and the filtered/smoothed
+    gap. ``StationaryBootstrap`` settings and the seed are step 4.3's.
+
+    ``sharpe_diff`` is signed **refit minus not-refit**: positive means the runs
+    that began on a 31 December refit paid more.
+    """
+    from arch.bootstrap import StationaryBootstrap
+
+    joined = join_next_return(labels, factors, cfg)
+    flag = run_started_on_refit(labels, refits).reindex(joined.index).astype(bool)
+    states = states_of(joined)
+    factor_names = list(cfg.strategy_factors)
+
+    arr = np.column_stack(
+        [
+            joined["label"].to_numpy(dtype="float64"),
+            joined["assigned"].to_numpy(dtype="float64"),
+            flag.to_numpy(dtype="float64"),
+            joined[factor_names].to_numpy(dtype="float64"),
+        ]
+    )
+
+    def _cells(sample: np.ndarray) -> np.ndarray:
+        use = sample[sample[:, 1] > 0.5]
+        return _sharpe_by_state_and_flag(use[:, 0], use[:, 2], use[:, 3:], states, cfg.features_ddof)
+
+    reps = cfg.bootstrap_n_replications
+    draws = np.full((reps, len(states), len(FLAG_VALUES), len(factor_names)), np.nan)
+    bootstrap = StationaryBootstrap(cfg.bootstrap_block_size, arr, seed=cfg.run_seed)
+    for r, ((draw,), _) in enumerate(bootstrap.bootstrap(reps)):
+        draws[r] = _cells(draw)
+    diff_draws = draws[:, :, 1, :] - draws[:, :, 0, :]
+
+    low = np.nanquantile(draws, cfg.bootstrap_p_low, axis=0)
+    high = np.nanquantile(draws, cfg.bootstrap_p_high, axis=0)
+    diff_low = np.nanquantile(diff_draws, cfg.bootstrap_p_low, axis=0)
+    diff_high = np.nanquantile(diff_draws, cfg.bootstrap_p_high, axis=0)
+
+    observed = conditional_stats_refit_split(labels, factors, refits, cfg)
+    lookup = {(row.factor, row.state, bool(row.run_started_on_refit)): row for row in observed.itertuples(index=False)}
+
+    stats_rows, diff_rows = [], []
+    for fi, factor in enumerate(factor_names):
+        for si, state in enumerate(states):
+            for vi, value in enumerate(FLAG_VALUES):
+                row = lookup[(factor, state, value)]
+                stats_rows.append(
+                    (factor, state, value, row.n, row.ann_mean, row.ann_std, row.sharpe,
+                     low[si, vi, fi], high[si, vi, fi],
+                     bool(excludes_zero(low[si, vi, fi], high[si, vi, fi])))
+                )
+            false_row, true_row = lookup[(factor, state, False)], lookup[(factor, state, True)]
+            diff_rows.append(
+                (factor, state, true_row.sharpe - false_row.sharpe, diff_low[si, fi], diff_high[si, fi],
+                 bool(excludes_zero(diff_low[si, fi], diff_high[si, fi])), false_row.n, true_row.n)
+            )
+
+    return (
+        pd.DataFrame(stats_rows, columns=list(REFIT_SPLIT_CI_COLUMNS)),
+        pd.DataFrame(diff_rows, columns=list(REFIT_SPLIT_DIFF_COLUMNS)),
+    )

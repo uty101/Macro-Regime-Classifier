@@ -9,7 +9,9 @@ import pandas as pd
 import pytest
 
 from regime.conditional import (
+    add_excess_sharpe,
     block_bootstrap_ci,
+    bootstrap_refit_split,
     bootstrap_conditional,
     conditional_stats,
     conditional_stats_from_joined,
@@ -343,3 +345,94 @@ def test_gap_sign_is_smoothed_minus_filtered():
         assert row.gap == pytest.approx(expected, abs=1e-12)
     assert (gap.loc[gap.state == 1, "gap"] > 0).all()
     assert (gap.loc[gap.state == 0, "gap"] < 0).all()
+
+
+def test_excess_sharpe_is_conditional_minus_unconditional():
+    """``excess_sharpe`` is the cell's Sharpe less that factor's pooled Sharpe, and nothing else.
+
+    Reviewer answer to section 4 Q3: Mkt-RF pays 0.668 unconditionally over the
+    out-of-sample window, so a conditional 0.712 is a level rather than a
+    finding. The column is checked against a pooled table computed here from
+    the same returns, not against the function that produced it, and the
+    original nine columns are asserted unchanged and in place.
+    """
+    cfg = _bootstrap_cfg()
+    rng = np.random.default_rng(cfg.run_seed)
+    labels = list(rng.integers(0, 3, size=60))
+    returns = {f: rng.normal(0.005, 0.03, size=60) for f in cfg.strategy_factors}
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+
+    stats = block_bootstrap_ci(label_frame, factors, cfg)
+    pooled = unconditional_stats(label_frame, factors, cfg)
+    with_excess = add_excess_sharpe(stats, pooled)
+
+    assert list(with_excess.columns) == [
+        "factor", "state", "n", "ann_mean", "ann_std", "sharpe", "excess_sharpe",
+        "sharpe_p05", "sharpe_p95", "excludes_zero",
+    ]
+    pd.testing.assert_frame_equal(with_excess[list(stats.columns)], stats)
+
+    sqrt12 = np.sqrt(12.0)
+    for row in with_excess.itertuples(index=False):
+        sample = np.array(returns[row.factor])                      # every month, no state, no assigned filter
+        level = sample.mean() / sample.std(ddof=1) * sqrt12
+        assert row.excess_sharpe == pytest.approx(row.sharpe - level, abs=1e-12)
+
+    # a factor with no pooled row is an error, not a silent NaN column
+    with pytest.raises(KeyError, match="unconditional_stats has no row"):
+        add_excess_sharpe(stats, pooled.iloc[:1])
+
+
+def test_refit_split_difference_zero_when_flags_identical():
+    """When the two halves of the refit split hold identical returns, the difference is exactly 0.
+
+    ``bootstrap_block_size`` is set far above the sample length, so every
+    stationary-bootstrap draw is one circular block covering the whole series:
+    a rotation, which preserves each (state, flag) half exactly. The two halves
+    hold the same returns, so their Sharpes coincide in every replication and
+    both percentiles of the difference are 0. That holds only because the two
+    flags travel in the same bootstrap row; resampled independently the
+    percentiles would straddle 0.
+
+    The label series alternates 0, 1, 0, 1 ... so every row is its own run, and
+    the run start is the row itself; the refit list then sets the flag row by
+    row, giving each state six flagged and six unflagged months carrying the
+    same six returns.
+    """
+    cfg = _bootstrap_cfg(bootstrap_block_size=10 ** 9, bootstrap_n_replications=50)
+    values = [0.01, -0.02, 0.03, 0.005, -0.01, 0.02]
+
+    labels, flags, returns = [], [], {f: [] for f in cfg.strategy_factors}
+    for v in values:
+        for flag in (False, True):
+            for state in (0, 1):
+                labels.append(state)
+                flags.append(flag)
+                for f in cfg.strategy_factors:
+                    returns[f].append(v)
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+    refits = [d for d, flag in zip(label_frame.index, flags) if flag]
+
+    assert list(run_started_on_refit(label_frame, refits)) == flags   # every row is its own run
+
+    split, differences = bootstrap_refit_split(label_frame, factors, refits, cfg)
+
+    assert list(split.columns) == [
+        "factor", "state", "run_started_on_refit", "n", "ann_mean", "ann_std", "sharpe",
+        "sharpe_p05", "sharpe_p95", "excludes_zero",
+    ]
+    assert list(differences.columns) == [
+        "factor", "state", "sharpe_diff", "diff_p05", "diff_p95", "excludes_zero", "n_false", "n_true",
+    ]
+    assert len(split) == len(cfg.strategy_factors) * 2 * 2
+    assert len(differences) == len(cfg.strategy_factors) * 2
+    assert list(differences["n_false"]) == [6] * len(differences)
+    assert list(differences["n_true"]) == [6] * len(differences)
+
+    for row in differences.itertuples(index=False):
+        assert row.sharpe_diff == pytest.approx(0.0, abs=1e-12)
+        assert row.diff_p05 == pytest.approx(0.0, abs=1e-12)
+        assert row.diff_p95 == pytest.approx(0.0, abs=1e-12)
+        assert row.excludes_zero is False
