@@ -127,3 +127,94 @@ def test_dollar_splice_has_no_level_jump(tmp_path) -> None:
     assert out.iloc[:lag].isna().all() and out.iloc[lag:].notna().all()
     np.testing.assert_allclose(out.dropna().to_numpy(), expected.dropna().to_numpy(), rtol=0, atol=1e-12)
 
+
+# ---------------------------------------------------------------- step 2.3
+
+
+def _synthetic_raw(cfg) -> pd.DataFrame:
+    """Ten random columns on the full decision-date index; breakeven_chg12 NaN before robustness_from."""
+    rng = np.random.default_rng(cfg.run_seed)
+    index = pd.date_range(pd.Timestamp(cfg.sample_start), pd.Timestamp(cfg.sample_end), freq="ME", name="date")
+    cols = list(cfg.features_core) + list(cfg.features_robustness)
+    raw = pd.DataFrame(rng.normal(size=(len(index), len(cols))), index=index, columns=cols)
+    raw.loc[index < pd.Timestamp(cfg.sample_robustness_from), "breakeven_chg12"] = np.nan
+    return raw
+
+
+def _spike_rows(cfg) -> list:
+    index = pd.date_range(pd.Timestamp(cfg.sample_features_from), pd.Timestamp(cfg.sample_end), freq="ME")
+    w = index.get_loc(pd.Timestamp(cfg.sample_first_window_end))
+    return [index[w], index[w + 1], index[w + 60], index[-2]]
+
+
+# t inside the first window is not parametrised: for those dates z uses the moments of the whole
+# window [features_from, first_window_end] by construction (convention 2), so a spike planted at t + 1
+# inside the window changes them. From first_window_end onward nothing dated after t may move z at t.
+@pytest.mark.parametrize("t", _spike_rows(load_config()), ids=lambda t: t.strftime("%Y-%m-%d"))
+def test_spike_after_t_does_not_change_z_at_t(tmp_path, t) -> None:
+    cfg = _cfg(tmp_path)
+    raw = _synthetic_raw(cfg)
+    z_clean = standardise(raw, cfg)
+
+    window = raw.loc[pd.Timestamp(cfg.sample_features_from):pd.Timestamp(cfg.sample_first_window_end)]
+    sigma_w = window.std(ddof=cfg.features_ddof)
+    spiked = raw.copy()
+    pos = spiked.index.get_loc(t)
+    spiked.iloc[pos + 1] = spiked.iloc[pos + 1] + 10 * sigma_w
+    z_spiked = standardise(spiked, cfg)
+
+    upto = z_clean.index <= t
+    np.testing.assert_allclose(
+        z_spiked.loc[upto].to_numpy(), z_clean.loc[upto].to_numpy(), rtol=0, atol=1e-12, equal_nan=True
+    )
+    after = z_clean.index > t
+    assert not np.allclose(z_spiked.loc[after].to_numpy(), z_clean.loc[after].to_numpy(), atol=1e-6, equal_nan=True)
+
+
+def test_first_window_rule(tmp_path) -> None:
+    cfg = _cfg(tmp_path)
+    raw = _synthetic_raw(cfg)
+    z = standardise(raw, cfg)
+    start = pd.Timestamp(cfg.sample_features_from)
+    window_end = pd.Timestamp(cfg.sample_first_window_end)
+    ddof = cfg.features_ddof
+    assert z.index[0] == start and z.index[-1] == pd.Timestamp(cfg.sample_end)
+    assert list(z.columns) == list(raw.columns)
+
+    window = raw.loc[start:window_end]
+    mean_w = window.mean()
+    std_w = window.std(ddof=ddof)
+    for t in [pd.Timestamp("1991-01-31"), pd.Timestamp("1997-06-30"), window_end]:
+        expected = (raw.loc[t] - mean_w) / std_w
+        np.testing.assert_allclose(z.loc[t].to_numpy(), expected.to_numpy(), rtol=0, atol=1e-12, equal_nan=True)
+
+    t = pd.Timestamp("2005-01-31")
+    upto = raw.loc[start:t]
+    expected = (raw.loc[t] - upto.mean()) / upto.std(ddof=ddof)
+    np.testing.assert_allclose(z.loc[t].to_numpy(), expected.to_numpy(), rtol=0, atol=1e-12)
+    not_window = (raw.loc[t] - mean_w) / std_w
+    assert not np.allclose(z.loc[t].to_numpy(), not_window.to_numpy(), atol=1e-6)
+
+    # breakeven_chg12 is NaN before robustness_from: its window moments are over its own non-NaN rows.
+    be = window["breakeven_chg12"].dropna()
+    assert len(be) == 12
+    t_be = be.index[-1]
+    assert z.loc[t_be, "breakeven_chg12"] == pytest.approx((be.iloc[-1] - be.mean()) / be.std(ddof=ddof), abs=1e-12)
+    assert z.loc[start:pd.Timestamp("2003-12-31"), "breakeven_chg12"].isna().all()
+
+
+def test_model_input_drops_nan_rows_and_writes_them(tmp_path) -> None:
+    cfg = _cfg(tmp_path)
+    raw = _synthetic_raw(cfg)
+    raw.loc[pd.Timestamp("1990-06-30"), "log_vix"] = np.nan   # before features_from: never in the output
+    raw.loc[pd.Timestamp("2010-03-31"), ["cpi_3m_ann", "oil_chg12"]] = np.nan
+    z = standardise(raw, cfg)
+    x = model_input(z, cfg)
+    assert list(x.columns) == list(cfg.features_core)
+    assert x.index[0] == pd.Timestamp(cfg.sample_features_from)
+    assert pd.Timestamp("2010-03-31") not in x.index
+    assert len(x) == len(z) - 1 and not x.isna().any().any()
+    dropped = pd.read_csv(tmp_path / "dropped_rows.csv")
+    assert list(dropped.columns) == ["date", "missing"]
+    assert dropped["date"].tolist() == ["2010-03-31"]
+    assert dropped["missing"].tolist() == ["cpi_3m_ann;oil_chg12"]
