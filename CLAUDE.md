@@ -1,6 +1,6 @@
 # CLAUDE.md — Macro Regime Classifier and Factor Timing
 
-Sections 0 and 3 of `REGIME_KICKOFF_v2.md`, verbatim except rule 10, which carries the session 0 review revision (60-minute threshold for the long steps). The full build plan is `PLAN.md`; every parameter is in `config.toml`; resolved conventions are in `docs/CONVENTIONS_RESOLVED.md`.
+Sections 0 and 3 of `REGIME_KICKOFF_v2.md`, verbatim except rule 10, which carries the session 0 review revision (60-minute threshold for the long steps), and rule 11, added in the section 3 revision (`instructions/03b_section_3_revision.md`). Instruction messages from session 0 to section 3 predate rule 11 and were not saved; `instructions/00_history.md` records that and lists the commits. The full build plan is `PLAN.md`; every parameter is in `config.toml`; resolved conventions are in `docs/CONVENTIONS_RESOLVED.md`.
 
 ## 0. How this repo is run
 
@@ -18,6 +18,7 @@ Rules that hold for every session:
 8. No library other than those in `pyproject.toml`. If you believe one is needed, it is an `OPEN.md` item.
 9. No notebooks. Everything runs from `python -m regime.run` and `pytest`.
 10. If the runtime of a step exceeds 20 minutes on your machine (60 minutes for steps 3.4, 3.5, 3.6, 6.1, 6.2 and 6.3; `run.step_timeout_minutes`, `run.long_step_timeout_minutes` and `run.long_steps` in config), stop and report the timing in the review file rather than reducing restarts, replications or the grid.
+11. Every session begins by saving its instruction message verbatim as `instructions/NN_<name>.md` (NN = next number, names match the section) and committing it before any other work. Every session ends by writing `instructions/NN_<name>.status.md` with: outcome (completed / stopped), the step reached, the reason for any stop, every question or blocker for the reviewer, and the final `git log origin/main --oneline -3`; then committing and pushing it. This applies to sessions that stop early, refuse under rule 1, or hit rule 4: the status file is always written and always pushed. The reviewer reads `instructions/`, `review/` and the repo only; nothing is relayed by chat.
 
 ## 3. Timing convention
 
