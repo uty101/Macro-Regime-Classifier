@@ -12,6 +12,7 @@ from regime.config import load_config
 from regime.strategy import (
     _weight_row,
     backtest,
+    run_timing_grid,
     static_weights,
     trailing_conditional_sharpe,
     weights,
@@ -280,3 +281,88 @@ def test_static_weights_have_zero_turnover():
             assert np.allclose(result["turnover"].to_numpy(), 0.0, atol=1e-15)
             assert np.allclose(result["cost"].to_numpy(), 0.0, atol=1e-15)
             assert np.allclose(result["net_ret"].to_numpy(), result["gross_ret"].to_numpy(), atol=1e-15)
+
+
+def _grid_frames(cfg, n=80):
+    """Four label frames over the same dates, as run.py section 5 passes them in."""
+    rng = np.random.default_rng(cfg.run_seed)
+    earned = list(rng.normal(0.005, 0.03, size=n))
+    _, factors = _frames([0] * n, earned)
+    frames = {}
+    for i, source in enumerate(cfg.strategy_label_sources):
+        labels = list(rng.integers(0, 3, size=n))
+        frame, _ = _frames(labels, earned)
+        frame.iloc[i :: 13, frame.columns.get_loc("assigned")] = False
+        frames[source] = frame
+    return frames, factors
+
+
+def test_timing_grid_has_72_rows_and_unique_keys():
+    cfg = _cfg(strategy_min_regime_obs=6)
+    frames, factors = _grid_frames(cfg)
+
+    grid = run_timing_grid(frames, factors, cfg)
+
+    assert list(grid.columns) == [
+        "eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed", "diff",
+        "diff_p05", "diff_p95", "p_one_sided", "mean_turnover", "n_months",
+    ]
+    expected = (
+        len(cfg.strategy_eta_grid) * len(cfg.strategy_lag_grid)
+        * len(cfg.strategy_cost_bp_grid) * len(cfg.strategy_label_sources)
+    )
+    assert expected == 72
+    assert len(grid) == 72
+    assert not grid.duplicated(subset=["eta", "lag", "cost_bp", "source"]).any()
+    assert grid[["diff_p05", "diff_p95", "p_one_sided"]].isna().all().all()   # step 5.5 fills these
+    assert np.allclose(grid["diff"], grid["sharpe_timed"] - grid["sharpe_static"], atol=1e-12)
+    assert (grid["n_months"] > 0).all()
+
+
+def test_static_row_is_identical_across_sources():
+    """For a given (lag, cost_bp) the static comparator is one number, whatever the source or eta.
+
+    The four sources share identical out-of-sample dates, so the 1/5 book they
+    are each compared against is the same book earning the same months. If this
+    ever failed, a positive ``diff`` could be a difference of samples rather
+    than a difference of strategies.
+    """
+    cfg = _cfg(strategy_min_regime_obs=6)
+    frames, factors = _grid_frames(cfg)
+
+    grid = run_timing_grid(frames, factors, cfg)
+
+    for (lag, cost_bp), block in grid.groupby(["lag", "cost_bp"]):
+        assert block["sharpe_static"].nunique() == 1, (lag, cost_bp)
+        assert block["n_months"].nunique() == 1, (lag, cost_bp)
+
+
+def test_timed_equals_static_when_all_sharpes_are_equal():
+    """Nothing to choose between the factors means no tilt, at every eta.
+
+    All five allocation factors carry the identical return series, so every
+    trailing conditional Sharpe is equal across factors in every regime. S+ is
+    then flat, ``eta * S+_f / sum_g S+_g`` is ``eta / 5`` whatever eta is, and
+    the blend collapses to ``(1 - eta)/5 + eta/5 = 0.2``. The timed net series
+    must match the static one exactly -- including the cost line, since a book
+    that never moves pays no turnover.
+    """
+    cfg = _cfg(strategy_min_regime_obs=6)
+    rng = np.random.default_rng(cfg.run_seed)
+    n = 60
+    earned = list(rng.normal(0.008, 0.03, size=n))
+    labels = list(rng.integers(0, 3, size=n))
+    label_frame, factors = _frames(labels, earned)
+
+    for eta in cfg.strategy_eta_grid:
+        w = weights(label_frame, factors, eta, cfg)
+        assert np.allclose(w.to_numpy(), 0.2, atol=1e-12), eta
+        # the blend branch was actually reached; this is not a test of the fallbacks
+        assert (w.attrs["fallback_branch"] == "").any(), eta
+
+        for lag in cfg.strategy_lag_grid:
+            for cost_bp in cfg.strategy_cost_bp_grid:
+                timed = backtest(w, factors, lag, cost_bp, cfg)
+                static = backtest(static_weights(w.index, cfg), factors, lag, cost_bp, cfg)
+                assert np.allclose(timed["net_ret"].to_numpy(), static["net_ret"].to_numpy(), atol=1e-12)
+                assert np.allclose(timed["turnover"].to_numpy(), 0.0, atol=1e-12)

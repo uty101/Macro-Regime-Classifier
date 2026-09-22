@@ -216,3 +216,109 @@ def backtest(weights: pd.DataFrame, factors: pd.DataFrame, lag: int, cost_bp: fl
     )
     out.attrs["decision_date"] = pd.Series(decision_dates, index=out.index, name="decision_date")
     return out
+
+
+GRID_COLUMNS = (
+    "eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed", "diff",
+    "diff_p05", "diff_p95", "p_one_sided", "mean_turnover", "n_months",
+)
+WEIGHT_DEVIATION_COLUMNS = (
+    "source", "eta", "n_months", "n_months_off_static", "share_off_static",
+    "mean_abs_deviation", "max_abs_deviation",
+)
+DEVIATION_TOLERANCE = 1e-9
+
+
+def timing_cells(label_frames: dict[str, pd.DataFrame], factors: pd.DataFrame, cfg: Config) -> dict:
+    """Every cell of the grid, keyed ``(eta, lag, cost_bp, source)``.
+
+    Each value is ``{"static": ..., "timed": ..., "weights": ...}`` where the
+    two net-return series share one index of earning months -- the timed and
+    static books are built on the same decision dates and backtested at the
+    same lag, so the comparison is never between two different samples of
+    months. The weight books are built once per (source, eta) and reused
+    across the lag and cost axes, which is the only reason 72 cells are cheap.
+    """
+    books = {
+        (source, eta): weights(frame, factors, eta, cfg)
+        for source, frame in label_frames.items()
+        for eta in cfg.strategy_eta_grid
+    }
+
+    cells = {}
+    for eta in cfg.strategy_eta_grid:
+        for lag in cfg.strategy_lag_grid:
+            for cost_bp in cfg.strategy_cost_bp_grid:
+                for source in cfg.strategy_label_sources:
+                    book = books[(source, eta)]
+                    timed = backtest(book, factors, lag, cost_bp, cfg)
+                    static = backtest(static_weights(book.index, cfg), factors, lag, cost_bp, cfg)
+                    if not timed.index.equals(static.index):
+                        raise ValueError(f"timed and static earning months differ for {(eta, lag, cost_bp, source)}")
+                    cells[(eta, lag, cost_bp, source)] = {"static": static, "timed": timed, "weights": book}
+    return cells
+
+
+def run_timing_grid(label_frames: dict[str, pd.DataFrame], factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """The 3 x 2 x 3 x 4 = 72-row timing grid, with the interval and p columns left NaN for step 5.5.
+
+    ``sharpe = mean(net_ret) / std(net_ret, ddof) * sqrt(12)`` over the common
+    earning months, ``diff = sharpe_timed - sharpe_static``, ``mean_turnover``
+    of the timed book.
+
+    This is a grid and is reported as one. The single cell any summary may
+    lead with is fixed in ``config.toml`` before any of it was computed:
+    ``strategy.headline_eta``, ``headline_lag``, ``headline_cost_bp`` and
+    ``headline_source``.
+    """
+    rows = []
+    for (eta, lag, cost_bp, source), cell in timing_cells(label_frames, factors, cfg).items():
+        static, timed = cell["static"], cell["timed"]
+        sharpe_static = annualised_sharpe(static["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+        sharpe_timed = annualised_sharpe(timed["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+        rows.append(
+            (eta, lag, cost_bp, source, sharpe_static, sharpe_timed, sharpe_timed - sharpe_static,
+             np.nan, np.nan, np.nan, float(timed["turnover"].mean()), int(len(timed)))
+        )
+    return pd.DataFrame(rows, columns=list(GRID_COLUMNS))
+
+
+def weight_deviation_summary(
+    label_frames: dict[str, pd.DataFrame], factors: pd.DataFrame, cfg: Config
+) -> pd.DataFrame:
+    """How far the timed book ever actually moves from 1/5, per source and eta.
+
+    A timing grid whose ``diff`` is near zero has two possible explanations: the
+    tilt was taken and did not pay, or the tilt was never taken. This table
+    separates them. ``n_months_off_static`` counts the months whose weight
+    vector differs from the static one by more than 1e-9 in any component;
+    ``mean_abs_deviation`` and ``max_abs_deviation`` are over every weight of
+    every month, static rows included.
+    """
+    flat = static_weight(cfg)
+    rows = []
+    for source, frame in label_frames.items():
+        for eta in cfg.strategy_eta_grid:
+            book = weights(frame, factors, eta, cfg)
+            deviation = (book.to_numpy(dtype="float64") - flat)
+            off = (np.abs(deviation) > DEVIATION_TOLERANCE).any(axis=1)
+            rows.append(
+                (source, eta, int(len(book)), int(off.sum()), float(off.mean()),
+                 float(np.abs(deviation).mean()), float(np.abs(deviation).max()))
+            )
+    return pd.DataFrame(rows, columns=list(WEIGHT_DEVIATION_COLUMNS))
+
+
+def largest_turnover_months(result: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+    """The ``n`` largest single-month turnover values of one backtest, with their earning months.
+
+    Ties are broken by the earning month so the table is deterministic.
+    """
+    frame = result[["turnover"]].copy()
+    frame.index.name = "date"
+    return (
+        frame.reset_index()
+        .sort_values(["turnover", "date"], ascending=[False, True])
+        .head(n)
+        .reset_index(drop=True)
+    )

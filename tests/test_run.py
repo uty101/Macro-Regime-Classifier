@@ -15,6 +15,6 @@ def test_unbuilt_section_raises() -> None:
     from regime.config import load_config
 
     cfg = load_config()
-    # Section 4 is built as of this section; 5 is the first that is not.
-    with pytest.raises(NotImplementedError, match=r"^section 5 not built$"):
-        SECTIONS[5](cfg)
+    # Section 5 is built as of this section; 6 is the first that is not.
+    with pytest.raises(NotImplementedError, match=r"^section 6 not built$"):
+        SECTIONS[6](cfg)

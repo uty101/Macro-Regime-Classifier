@@ -449,7 +449,103 @@ def section_4(cfg: Config, pull: bool = False) -> None:
     project1_conditional(cfg, sources["hmm_filtered"])                                            # 4.5
 
 
-section_5 = _not_built(5)
+def section_5(cfg: Config, pull: bool = False) -> None:
+    """Section 5: the timed strategy — steps 5.1 to 5.5.
+
+    The four label frames are loaded here and passed to ``regime.strategy`` as
+    plain ``labels`` arguments. The strategy module never loads a label source
+    itself and cannot tell which one it holds (step 3.8), so the hindsight
+    labelling can sit in the comparison rows of the grid without ever reaching
+    the code that decides a weight at t.
+
+    The headline cell — ``strategy.headline_eta``, ``headline_lag``,
+    ``headline_cost_bp``, ``headline_source`` — was fixed in ``config.toml``
+    before any of this ran. The other 71 rows are a grid and are logged as one.
+    """
+    from pathlib import Path as _Path
+
+    from regime.data.french import load_french
+    from regime.strategy import (
+        largest_turnover_months,
+        run_timing_grid,
+        timing_cells,
+        weight_deviation_summary,
+    )
+
+    log = logging.getLogger("regime")
+    tables = _Path(cfg.outputs_tables_dir)
+    tables.mkdir(parents=True, exist_ok=True)
+
+    factors = load_french(cfg.french_pull_id, cfg)
+    sources = load_label_sources(cfg)
+
+    deviation = weight_deviation_summary(sources, factors, cfg)                                   # 5.1, 5.2
+    deviation.to_csv(tables / "weight_deviation.csv", index=False)
+    log.info("weight_deviation.csv written:\n%s", deviation.to_string(index=False))
+
+    grid = run_timing_grid(sources, factors, cfg)                                                 # 5.3, 5.4
+    grid.to_csv(cfg.outputs_timing_results, index=False)
+    log.info("timing_results.csv written: %d rows", len(grid))
+
+    headline = grid.loc[
+        (grid["eta"] == cfg.strategy_headline_eta)
+        & (grid["lag"] == cfg.strategy_headline_lag)
+        & (grid["cost_bp"] == cfg.strategy_headline_cost_bp)
+        & (grid["source"] == cfg.strategy_headline_source)
+    ]
+    log.info("headline cell (fixed in config before the grid was run):\n%s", headline.to_string(index=False))
+
+    decomposition = headline_decomposition(sources, factors, cfg)
+    decomposition.to_csv(tables / "timing_headline_decomposition.csv", index=False)
+    log.info("timing_headline_decomposition.csv written:\n%s", decomposition.to_string(index=False))
+
+    cells = timing_cells(sources, factors, cfg)
+    headline_key = (
+        cfg.strategy_headline_eta, cfg.strategy_headline_lag,
+        cfg.strategy_headline_cost_bp, cfg.strategy_headline_source,
+    )
+    top = largest_turnover_months(cells[headline_key]["timed"], 10)
+    top.to_csv(tables / "headline_turnover_top10.csv", index=False)
+    log.info("headline_turnover_top10.csv written:\n%s", top.to_string(index=False))
+
+
+DECOMPOSITION_COLUMNS = ("label", "eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed", "diff")
+
+
+def headline_decomposition(label_frames: dict, factors, cfg: Config):
+    """The headline cell beside the same cell at lag 0 and at 0 bp, so the two costs separate.
+
+    The grid has no zero-cost column — ``strategy.cost_bp_grid`` starts at 10 bp
+    — so the cost of trading cannot be read off it. These four rows hold the
+    source and eta of the headline cell fixed and vary only the lag and the
+    cost: lag 1 / 20 bp is the headline, lag 0 / 0 bp is the gross timing
+    signal, and the two mixed rows say how much of the gap between them is the
+    lag and how much is the trading.
+    """
+    import pandas as pd
+
+    from regime.strategy import annualised_sharpe, backtest, static_weights, weights
+
+    source, eta = cfg.strategy_headline_source, cfg.strategy_headline_eta
+    book = weights(label_frames[source], factors, eta, cfg)
+    static_book = static_weights(book.index, cfg)
+
+    variants = (
+        ("headline", cfg.strategy_headline_lag, cfg.strategy_headline_cost_bp),
+        ("no lag, no cost", 0, 0),
+        ("no lag, headline cost", 0, cfg.strategy_headline_cost_bp),
+        ("headline lag, no cost", cfg.strategy_headline_lag, 0),
+    )
+    rows = []
+    for label, lag, cost_bp in variants:
+        timed = backtest(book, factors, lag, cost_bp, cfg)
+        static = backtest(static_book, factors, lag, cost_bp, cfg)
+        s_timed = annualised_sharpe(timed["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+        s_static = annualised_sharpe(static["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+        rows.append((label, eta, lag, cost_bp, source, s_static, s_timed, s_timed - s_static))
+    return pd.DataFrame(rows, columns=list(DECOMPOSITION_COLUMNS))
+
+
 section_6 = _not_built(6)
 section_7 = _not_built(7)
 
