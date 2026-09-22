@@ -165,3 +165,173 @@ def conditional_stats_refit_split(
                 n, ann_mean, ann_std, sharpe = _moments(use.loc[mask, factor], cfg.features_ddof)
                 rows.append((factor, state, value, n, ann_mean, ann_std, sharpe))
     return pd.DataFrame(rows, columns=list(REFIT_SPLIT_COLUMNS))
+
+
+CI_COLUMNS = (
+    "factor", "state", "n", "ann_mean", "ann_std", "sharpe", "sharpe_p05", "sharpe_p95", "excludes_zero",
+)
+DIFF_COLUMNS = (
+    "factor", "state_a", "state_b", "sharpe_diff", "diff_p05", "diff_p95", "excludes_zero", "n_a", "n_b",
+)
+UNCONDITIONAL_COLUMNS = ("factor", "n", "ann_mean", "ann_std", "sharpe", "sharpe_p05", "sharpe_p95")
+NAN_REPLICATION_COLUMNS = ("source", "factor", "state", "n_replications", "n_nan", "share_nan")
+
+
+def excludes_zero(p_low, p_high):
+    """True where the whole interval lies on one side of zero. NaN endpoints never exclude."""
+    low, high = np.asarray(p_low, dtype="float64"), np.asarray(p_high, dtype="float64")
+    return ((low > 0) | (high < 0)) & np.isfinite(low) & np.isfinite(high)
+
+
+def _sharpe_by_state(label: np.ndarray, returns: np.ndarray, states: Sequence[int], ddof: int) -> np.ndarray:
+    """(n_states, n_factors) annualised Sharpes; NaN for a state with fewer than 2 rows.
+
+    A state with fewer than two observations has no sample standard deviation,
+    so its Sharpe is NaN *for that replication* rather than zero or dropped.
+    The percentiles are taken with ``np.nanquantile`` and the number of NaN
+    replications per cell is reported alongside.
+    """
+    out = np.full((len(states), returns.shape[1]), np.nan)
+    for i, state in enumerate(states):
+        rows = returns[label == state]
+        if len(rows) < 2:
+            continue
+        mean, sd = rows.mean(axis=0), rows.std(axis=0, ddof=ddof)
+        safe = np.where(sd > 0, sd, 1.0)
+        out[i] = np.where(sd > 0, mean / safe * SQRT_ANNUALISE, np.nan)
+    return out
+
+
+def state_pairs(states: Sequence[int]) -> list[tuple[int, int]]:
+    """Every (a, b) with a < b, ascending: 3 pairs at K = 3, 6 at K = 4."""
+    return [(a, b) for i, a in enumerate(states) for b in states[i + 1 :]]
+
+
+def _replication_matrices(joined: pd.DataFrame, states: Sequence[int], cfg: Config):
+    """Sharpe and pairwise-difference arrays over ``cfg.bootstrap_n_replications`` draws.
+
+    The whole joined frame is resampled jointly -- one row is one (label,
+    assigned, six returns) tuple -- so a label and the returns it is judged
+    against can never come from different months, and the unassigned rows stay
+    in the series rather than being deleted before the blocks are drawn.
+    Within each draw the assigned rows are selected exactly as
+    ``conditional_stats`` selects them.
+
+    Returns ``(sharpe, diff)`` of shapes (R, n_states, n_factors) and
+    (R, n_pairs, n_factors). Each difference is formed inside its own
+    replication from that replication's Sharpes, never from two independently
+    resampled marginals -- which is the whole reason the two tables share one
+    bootstrap.
+    """
+    from arch.bootstrap import StationaryBootstrap
+
+    factor_names = list(cfg.strategy_factors)
+    arr = np.column_stack(
+        [
+            joined["label"].to_numpy(dtype="float64"),
+            joined["assigned"].to_numpy(dtype="float64"),
+            joined[factor_names].to_numpy(dtype="float64"),
+        ]
+    )
+    reps = cfg.bootstrap_n_replications
+    pairs = state_pairs(states)
+    sharpe = np.full((reps, len(states), len(factor_names)), np.nan)
+    diff = np.full((reps, len(pairs), len(factor_names)), np.nan)
+    position = {state: i for i, state in enumerate(states)}
+
+    bootstrap = StationaryBootstrap(cfg.bootstrap_block_size, arr, seed=cfg.run_seed)
+    for r, ((draw,), _) in enumerate(bootstrap.bootstrap(reps)):
+        assigned = draw[draw[:, 1] > 0.5]
+        s = _sharpe_by_state(assigned[:, 0], assigned[:, 2:], states, cfg.features_ddof)
+        sharpe[r] = s
+        for j, (a, b) in enumerate(pairs):
+            diff[r, j] = s[position[b]] - s[position[a]]
+    return sharpe, diff
+
+
+def bootstrap_conditional(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config, source: str = ""):
+    """``(conditional_stats_with_ci, conditional_differences, nan_replication_counts)``.
+
+    One bootstrap, three tables: the per-cell intervals of step 4.3, the
+    pairwise state differences, and the count of replications in which a
+    cell's Sharpe was NaN.
+    """
+    joined = join_next_return(labels, factors, cfg)
+    states = states_of(joined)
+    observed = conditional_stats_from_joined(joined, cfg)
+    sharpe, diff = _replication_matrices(joined, states, cfg)
+
+    factor_names = list(cfg.strategy_factors)
+    low = np.nanquantile(sharpe, cfg.bootstrap_p_low, axis=0)
+    high = np.nanquantile(sharpe, cfg.bootstrap_p_high, axis=0)
+    n_nan = np.isnan(sharpe).sum(axis=0)
+
+    lookup = {(row.factor, row.state): row for row in observed.itertuples(index=False)}
+    stats_rows, nan_rows = [], []
+    for fi, factor in enumerate(factor_names):
+        for si, state in enumerate(states):
+            row = lookup[(factor, state)]
+            stats_rows.append(
+                (factor, state, row.n, row.ann_mean, row.ann_std, row.sharpe,
+                 low[si, fi], high[si, fi], bool(excludes_zero(low[si, fi], high[si, fi])))
+            )
+            nan_rows.append(
+                (source, factor, state, cfg.bootstrap_n_replications,
+                 int(n_nan[si, fi]), float(n_nan[si, fi]) / cfg.bootstrap_n_replications)
+            )
+    stats = pd.DataFrame(stats_rows, columns=list(CI_COLUMNS))
+
+    diff_low = np.nanquantile(diff, cfg.bootstrap_p_low, axis=0)
+    diff_high = np.nanquantile(diff, cfg.bootstrap_p_high, axis=0)
+    diff_rows = []
+    for fi, factor in enumerate(factor_names):
+        for pi, (a, b) in enumerate(state_pairs(states)):
+            row_a, row_b = lookup[(factor, a)], lookup[(factor, b)]
+            diff_rows.append(
+                (factor, a, b, row_b.sharpe - row_a.sharpe, diff_low[pi, fi], diff_high[pi, fi],
+                 bool(excludes_zero(diff_low[pi, fi], diff_high[pi, fi])), row_a.n, row_b.n)
+            )
+    differences = pd.DataFrame(diff_rows, columns=list(DIFF_COLUMNS))
+
+    return stats, differences, pd.DataFrame(nan_rows, columns=list(NAN_REPLICATION_COLUMNS))
+
+
+def block_bootstrap_ci(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """``conditional_stats`` with stationary-bootstrap percentiles and ``excludes_zero``."""
+    return bootstrap_conditional(labels, factors, cfg)[0]
+
+
+def conditional_differences(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Pairwise state differences of the conditional Sharpe, from the same bootstrap."""
+    return bootstrap_conditional(labels, factors, cfg)[1]
+
+
+def unconditional_stats(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Pooled factor statistics over the same out-of-sample dates, all months included.
+
+    No state conditioning and no ``assigned`` filter: this is the number every
+    conditional Sharpe has to be read against, on exactly the dates the
+    conditional tables use. ``labels`` is taken only for its index.
+    """
+    from arch.bootstrap import StationaryBootstrap
+
+    joined = join_next_return(labels, factors, cfg)
+    factor_names = list(cfg.strategy_factors)
+    returns = joined[factor_names]
+
+    reps = cfg.bootstrap_n_replications
+    draws = np.full((reps, len(factor_names)), np.nan)
+    arr = returns.to_numpy(dtype="float64")
+    bootstrap = StationaryBootstrap(cfg.bootstrap_block_size, arr, seed=cfg.run_seed)
+    for r, ((draw,), _) in enumerate(bootstrap.bootstrap(reps)):
+        mean, sd = draw.mean(axis=0), draw.std(axis=0, ddof=cfg.features_ddof)
+        safe = np.where(sd > 0, sd, 1.0)
+        draws[r] = np.where(sd > 0, mean / safe * SQRT_ANNUALISE, np.nan)
+
+    low = np.nanquantile(draws, cfg.bootstrap_p_low, axis=0)
+    high = np.nanquantile(draws, cfg.bootstrap_p_high, axis=0)
+    rows = []
+    for fi, factor in enumerate(factor_names):
+        n, ann_mean, ann_std, sharpe = _moments(returns[factor], cfg.features_ddof)
+        rows.append((factor, n, ann_mean, ann_std, sharpe, low[fi], high[fi]))
+    return pd.DataFrame(rows, columns=list(UNCONDITIONAL_COLUMNS))

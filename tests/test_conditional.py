@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 
 from regime.conditional import (
+    block_bootstrap_ci,
+    bootstrap_conditional,
+    conditional_stats,
     conditional_stats_from_joined,
+    excludes_zero,
+    state_pairs,
+    unconditional_stats,
     join_next_return,
     run_started_on_refit,
     unassigned_dates,
@@ -149,3 +155,130 @@ def test_run_started_on_refit_flag():
     # run 3 starts 2005-06-30 (not a refit), so 2005-07-31 being a refit is irrelevant
     assert list(flag) == [False, False, True, True, True, False, False, False]
     assert list(flag.index) == list(index)
+
+
+def _bootstrap_cfg(**kwargs):
+    """The real config with a small replication count, so a test is seconds not minutes."""
+    base = dataclasses.replace(load_config(), bootstrap_n_replications=100, strategy_factors=("Mkt-RF", "SMB"))
+    return dataclasses.replace(base, **kwargs)
+
+
+def _labels_and_factors(labels, returns, factor_names, first_window_end="2005-01-31"):
+    """A label frame and a factor frame that ``join_next_return`` turns into the intended joined frame.
+
+    The factor frame carries one extra month at the end, because the decision
+    at the last labelled date earns the month after it.
+    """
+    n = len(labels)
+    index = _months("2005-01-31", n)
+    factor_index = _months("2005-01-31", n + 1)
+    label_frame = pd.DataFrame({"label": labels, "assigned": [True] * n}, index=index)
+    factors = pd.DataFrame(
+        {f: [0.0] + list(returns[f]) for f in factor_names}, index=factor_index
+    )
+    return label_frame, factors, first_window_end
+
+
+def test_excludes_zero_rule():
+    cases = [(0.1, 0.4, True), (-0.4, -0.1, True), (-0.1, 0.4, False), (0.0, 0.4, False),
+             (-0.4, 0.0, False), (np.nan, 0.4, False), (0.1, np.nan, False)]
+    low = np.array([c[0] for c in cases])
+    high = np.array([c[1] for c in cases])
+    assert list(excludes_zero(low, high)) == [c[2] for c in cases]
+
+
+def test_bootstrap_reproducible_with_config_seed():
+    cfg = _bootstrap_cfg()
+    rng = np.random.default_rng(cfg.run_seed)
+    labels = list(rng.integers(0, 3, size=60))
+    returns = {f: rng.normal(0.005, 0.03, size=60) for f in cfg.strategy_factors}
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+
+    first = block_bootstrap_ci(label_frame, factors, cfg)
+    second = block_bootstrap_ci(label_frame, factors, cfg)
+
+    pd.testing.assert_frame_equal(first, second)
+
+
+def test_bootstrap_schema_and_n_unchanged():
+    cfg = _bootstrap_cfg()
+    rng = np.random.default_rng(cfg.run_seed)
+    labels = list(rng.integers(0, 3, size=60))
+    returns = {f: rng.normal(0.005, 0.03, size=60) for f in cfg.strategy_factors}
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+
+    with_ci = block_bootstrap_ci(label_frame, factors, cfg)
+    plain = conditional_stats(label_frame, factors, cfg)
+
+    assert list(with_ci.columns) == [
+        "factor", "state", "n", "ann_mean", "ann_std", "sharpe", "sharpe_p05", "sharpe_p95", "excludes_zero",
+    ]
+    assert len(with_ci.columns) == 9
+    pd.testing.assert_frame_equal(with_ci[list(plain.columns)], plain)
+
+
+def test_pairwise_difference_zero_when_states_identical():
+    """Two states whose return rows are identical differ by exactly 0, in every replication.
+
+    ``bootstrap_block_size`` is set far above the sample length, so every
+    stationary-bootstrap draw is a single circular block covering the whole
+    series: a rotation. A rotation preserves each state's rows exactly, so if
+    the two states hold the same returns their Sharpes coincide in every
+    replication and both percentiles of the difference are 0. That is only
+    true because the difference is formed inside each replication; had the two
+    states been resampled independently the percentiles would straddle 0.
+    """
+    cfg = _bootstrap_cfg(bootstrap_block_size=10 ** 9, bootstrap_n_replications=50)
+    values = [0.01, -0.02, 0.03, 0.005, -0.01, 0.02]
+    labels, returns = [], {f: [] for f in cfg.strategy_factors}
+    for v in values:                       # state 0 and state 1 get the same six returns
+        for state in (0, 1):
+            labels.append(state)
+            for f in cfg.strategy_factors:
+                returns[f].append(v)
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+
+    _stats, differences, _nan = bootstrap_conditional(label_frame, factors, cfg)
+
+    assert list(differences.columns) == [
+        "factor", "state_a", "state_b", "sharpe_diff", "diff_p05", "diff_p95", "excludes_zero", "n_a", "n_b",
+    ]
+    assert list(differences["state_a"]) == [0] * len(cfg.strategy_factors)
+    assert list(differences["state_b"]) == [1] * len(cfg.strategy_factors)
+    assert list(differences["n_a"]) == [6] * len(cfg.strategy_factors)
+    assert list(differences["n_b"]) == [6] * len(cfg.strategy_factors)
+    for row in differences.itertuples(index=False):
+        assert row.sharpe_diff == pytest.approx(0.0, abs=1e-12)
+        assert row.diff_p05 == pytest.approx(0.0, abs=1e-12)
+        assert row.diff_p95 == pytest.approx(0.0, abs=1e-12)
+        assert row.excludes_zero is False
+
+
+def test_pair_count_is_three_at_k3_and_six_at_k4():
+    assert len(state_pairs([0, 1, 2])) == 3
+    assert len(state_pairs([0, 1, 2, 3])) == 6
+
+
+def test_unconditional_stats_uses_every_month_and_the_same_dates():
+    cfg = _bootstrap_cfg()
+    rng = np.random.default_rng(cfg.run_seed)
+    labels = list(rng.integers(0, 3, size=60))
+    returns = {f: rng.normal(0.005, 0.03, size=60) for f in cfg.strategy_factors}
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+    # half the rows unassigned: the unconditional table must ignore the flag
+    label_frame = label_frame.copy()
+    label_frame.iloc[::2, label_frame.columns.get_loc("assigned")] = False
+
+    table = unconditional_stats(label_frame, factors, cfg)
+
+    assert list(table.columns) == ["factor", "n", "ann_mean", "ann_std", "sharpe", "sharpe_p05", "sharpe_p95"]
+    assert list(table["n"]) == [60, 60]
+    for row in table.itertuples(index=False):
+        sample = np.array(returns[row.factor])
+        assert row.ann_mean == pytest.approx(sample.mean() * 12, abs=1e-12)
+        assert row.sharpe == pytest.approx(sample.mean() / sample.std(ddof=1) * np.sqrt(12), abs=1e-12)
+        assert row.sharpe_p05 <= row.sharpe_p95

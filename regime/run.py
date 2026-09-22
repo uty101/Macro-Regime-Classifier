@@ -324,10 +324,12 @@ def section_4(cfg: Config, pull: bool = False) -> None:
     import pandas as pd
 
     from regime.conditional import (
+        bootstrap_conditional,
         conditional_stats,
         conditional_stats_refit_split,
         join_next_return,
         unassigned_dates,
+        unconditional_stats,
     )
     from regime.data.french import load_french
     from regime.models.hmm import refit_dates
@@ -360,6 +362,29 @@ def section_4(cfg: Config, pull: bool = False) -> None:
     split = conditional_stats_refit_split(sources["hmm_filtered"], factors, refits, cfg)
     split.to_csv(tables / "conditional_stats_refit_split.csv", index=False)
     log.info("conditional_stats_refit_split.csv written: %d rows (hmm_filtered only, no bootstrap)", len(split))
+
+    nan_counts = []
+    for name in cfg.strategy_label_sources:                                                       # 4.3
+        stats, differences, nan_rows = bootstrap_conditional(sources[name], factors, cfg, source=name)
+        stats.to_csv(tables / f"conditional_stats_{name}.csv", index=False)
+        differences.to_csv(tables / f"conditional_differences_{name}.csv", index=False)
+        nan_counts.append(nan_rows)
+        log.info(
+            "%s: %d of %d cells exclude zero; %d of %d pairwise differences exclude zero",
+            name, int(stats["excludes_zero"].sum()), len(stats),
+            int(differences["excludes_zero"].sum()), len(differences),
+        )
+    nan_table = pd.concat(nan_counts, ignore_index=True)
+    nan_table.to_csv(tables / "bootstrap_nan_replications.csv", index=False)
+    loud = nan_table.loc[nan_table["share_nan"] > 0.05]
+    log.info("bootstrap_nan_replications.csv written: %d rows, max share %.4f, %d above 5%%",
+             len(nan_table), float(nan_table["share_nan"].max()), len(loud))
+    if len(loud):
+        log.warning("cells with over 5%% NaN replications:\n%s", loud.to_string(index=False))
+
+    pooled = unconditional_stats(sources[cfg.strategy_headline_source], factors, cfg)
+    pooled.to_csv(tables / "unconditional_stats.csv", index=False)
+    log.info("unconditional_stats.csv written:\n%s", pooled.to_string(index=False))
 
 
 section_5 = _not_built(5)
