@@ -98,7 +98,37 @@ def section_1(cfg: Config, pull: bool = False) -> None:
         log.info("as-of panel not built: market_pull_id or vintage_pull_id not pinned")
 
 
-section_2 = _not_built(2)
+def section_2(cfg: Config, pull: bool = False) -> None:
+    """Section 2: raw features, the dollar splice, real-time z-scores, the sanity table and the review chart."""
+    from pathlib import Path
+
+    import pandas as pd
+
+    from regime.charts import features_review_chart
+    from regime.features import build_raw_features, model_input, standardise
+    from regime.tables import feature_sanity
+
+    log = logging.getLogger("regime")
+    panel = pd.read_parquet(cfg.outputs_asof_panel)
+    log.info("as-of panel read from %s: %d rows x %d columns", cfg.outputs_asof_panel, *panel.shape)
+
+    raw = build_raw_features(panel, cfg)                                   # 2.1 and 2.2
+    log.info("raw features written to %s: %d rows x %d columns", cfg.outputs_features_raw, *raw.shape)
+    z = standardise(raw, cfg)                                               # 2.3
+    log.info("z written to %s: %d rows from %s", cfg.outputs_features_z, len(z), z.index[0].date())
+    x = model_input(z, cfg)
+    dropped = pd.read_csv(cfg.outputs_dropped_rows)
+    log.info("model input %d rows x %d columns; %d dropped rows written to %s", *x.shape, len(dropped), cfg.outputs_dropped_rows)
+    for row in dropped.itertuples(index=False):
+        log.info("dropped %s: %s", row.date, row.missing)
+
+    table = feature_sanity(raw, cfg)                                        # 2.4
+    log.info("feature_sanity.csv written: %d rows", len(table))
+    chart = Path(cfg.outputs_charts_dir) / "features_review.png"
+    features_review_chart(raw, str(chart), cfg)
+    log.info("features review chart written to %s", chart)
+
+
 section_3 = _not_built(3)
 section_4 = _not_built(4)
 section_5 = _not_built(5)
