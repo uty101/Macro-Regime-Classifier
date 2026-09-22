@@ -160,3 +160,59 @@ def static_weights(index: pd.DatetimeIndex, cfg: Config) -> pd.DataFrame:
     )
     frame.index.name = "date"
     return frame
+
+
+BACKTEST_COLUMNS = ("gross_ret", "turnover", "cost", "net_ret")
+
+
+def backtest(weights: pd.DataFrame, factors: pd.DataFrame, lag: int, cost_bp: float, cfg: Config) -> pd.DataFrame:
+    """The net return series of a weight book. Indexed by the *earning* month, not the decision date.
+
+    The weights dated t earn the factor returns of the row ``1 + lag``
+    positions after t in the monthly factor index: month t+1 at lag 0, month
+    t+2 at lag 1. The shift is positional, on an index already asserted to be
+    a complete monthly month-end sequence by ``join_next_return``, so a
+    missing factor month cannot quietly turn one lag into another.
+
+    ``turnover_t = 0.5 * sum_f |w_{f,t} - w_{f,t-1}|`` with the book starting
+    from the static vector, so the first row's turnover is the cost of
+    departing from 1/5 and is zero for a static book. ``cost`` is
+    ``cost_bp / 1e4 * turnover_t`` and is deducted in the month the weights
+    earn, not in the month they are decided -- the trade happens at the open
+    of the earning month.
+
+    Decision dates whose earning month is beyond the factor data are dropped.
+    Only sleeve turnover is charged; the internal turnover of each
+    Fama-French factor is identical across the static and timed books and is
+    not modelled (convention 9).
+    """
+    universe = list(cfg.strategy_universe)
+    index = pd.DatetimeIndex(factors.index)
+    step = 1 + int(lag)
+
+    position = index.get_indexer(weights.index)
+    if (position < 0).any():
+        missing = weights.index[position < 0]
+        raise KeyError(f"{len(missing)} decision dates are absent from the factor index, first {missing[0]}")
+    earning_position = position + step
+    keep = earning_position < len(index)
+
+    decision_dates = weights.index[keep]
+    earning_months = index[earning_position[keep]]
+
+    w = weights.loc[decision_dates, universe]
+    returns = factors.loc[earning_months, universe]
+
+    gross = (w.to_numpy(dtype="float64") * returns.to_numpy(dtype="float64")).sum(axis=1)
+
+    previous = weights.loc[decision_dates, universe].shift(1)
+    previous.iloc[0] = static_weight(cfg)                       # the book starts from the static vector
+    turnover = 0.5 * (w - previous).abs().sum(axis=1).to_numpy(dtype="float64")
+    cost = cost_bp / 1e4 * turnover
+
+    out = pd.DataFrame(
+        {"gross_ret": gross, "turnover": turnover, "cost": cost, "net_ret": gross - cost},
+        index=pd.DatetimeIndex(earning_months, name="date"),
+    )
+    out.attrs["decision_date"] = pd.Series(decision_dates, index=out.index, name="decision_date")
+    return out

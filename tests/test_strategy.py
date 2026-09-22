@@ -9,7 +9,13 @@ import pandas as pd
 import pytest
 
 from regime.config import load_config
-from regime.strategy import _weight_row, static_weights, trailing_conditional_sharpe, weights
+from regime.strategy import (
+    _weight_row,
+    backtest,
+    static_weights,
+    trailing_conditional_sharpe,
+    weights,
+)
 
 UNIVERSE = ("SMB", "HML", "RMW", "CMA", "UMD")
 
@@ -199,3 +205,78 @@ def test_weights_sum_to_one():
         assert np.allclose(w.sum(axis=1).to_numpy(), 1.0, atol=1e-12)
         assert (w.to_numpy() >= 0).all()
         assert set(w.attrs["fallback_branch"]) & {"unassigned"}
+
+
+BACKTEST_INDEX = _months("2020-01-31", 5)
+BACKTEST_WEIGHTS = pd.DataFrame(
+    [[0.2, 0.2, 0.2, 0.2, 0.2],
+     [0.4, 0.1, 0.1, 0.2, 0.2],
+     [0.0, 0.0, 0.5, 0.5, 0.0]],
+    index=_months("2020-01-31", 3),
+    columns=list(UNIVERSE),
+)
+BACKTEST_FACTORS = pd.DataFrame(
+    [[0.00, 0.00, 0.00, 0.00, 0.00],       # 2020-01-31, earned by no decision in this example
+     [0.01, 0.02, -0.01, 0.00, 0.03],      # 2020-02-29
+     [-0.02, 0.01, 0.04, 0.01, -0.01],     # 2020-03-31
+     [0.03, -0.03, 0.02, 0.02, 0.00],      # 2020-04-30
+     [0.01, 0.01, 0.01, -0.02, 0.02]],     # 2020-05-31
+    index=BACKTEST_INDEX,
+    columns=list(UNIVERSE),
+)
+
+
+def test_backtest_three_month_literal():
+    """PLAN.md step 5.3's example, both lags, every number written out.
+
+    lag 0 earns month t+1 and lag 1 earns month t+2, so the same three weight
+    vectors earn three different months and the turnover charged in a given
+    calendar month moves with the lag. The turnover series is identical in
+    both -- 0.0, 0.2, 0.7 -- because it is a property of the weight book, not
+    of when the book earns.
+    """
+    cfg = _cfg()
+
+    zero = backtest(BACKTEST_WEIGHTS, BACKTEST_FACTORS, lag=0, cost_bp=20, cfg=cfg)
+
+    assert list(zero.columns) == ["gross_ret", "turnover", "cost", "net_ret"]
+    assert list(zero.index) == [pd.Timestamp("2020-02-29"), pd.Timestamp("2020-03-31"), pd.Timestamp("2020-04-30")]
+    assert list(zero["gross_ret"]) == pytest.approx([0.0100, -0.0030, 0.0200], abs=1e-12)
+    assert list(zero["turnover"]) == pytest.approx([0.0, 0.2, 0.7], abs=1e-12)
+    assert list(zero["cost"]) == pytest.approx([0.0000, 0.0004, 0.0014], abs=1e-12)
+    assert list(zero["net_ret"]) == pytest.approx([0.0100, -0.0034, 0.0186], abs=1e-12)
+
+    one = backtest(BACKTEST_WEIGHTS, BACKTEST_FACTORS, lag=1, cost_bp=20, cfg=cfg)
+
+    assert list(one.index) == [pd.Timestamp("2020-03-31"), pd.Timestamp("2020-04-30"), pd.Timestamp("2020-05-31")]
+    assert list(one["gross_ret"]) == pytest.approx([0.0060, 0.0150, -0.0050], abs=1e-12)
+    assert list(one["turnover"]) == pytest.approx([0.0, 0.2, 0.7], abs=1e-12)
+    assert list(one["cost"]) == pytest.approx([0.0000, 0.0004, 0.0014], abs=1e-12)
+    assert list(one["net_ret"]) == pytest.approx([0.0060, 0.0146, -0.0064], abs=1e-12)
+
+
+def test_backtest_drops_decision_dates_without_an_earning_month():
+    """At lag 1 the last decision date of a five-month factor file has no month t+2."""
+    cfg = _cfg()
+    w = pd.DataFrame(0.2, index=BACKTEST_INDEX, columns=list(UNIVERSE))
+
+    assert list(backtest(w, BACKTEST_FACTORS, lag=0, cost_bp=0, cfg=cfg).index) == list(BACKTEST_INDEX[1:])
+    assert list(backtest(w, BACKTEST_FACTORS, lag=1, cost_bp=0, cfg=cfg).index) == list(BACKTEST_INDEX[2:])
+
+
+def test_static_weights_have_zero_turnover():
+    """A book that never leaves 1/5 pays no cost, including on its first row."""
+    cfg = _cfg()
+    index = _months("2005-01-31", 30)
+    factors = pd.DataFrame(
+        np.random.default_rng(cfg.run_seed).normal(0.005, 0.03, size=(31, 5)),
+        index=_months("2005-01-31", 31), columns=list(UNIVERSE),
+    )
+    w = static_weights(index, cfg)
+
+    for lag in cfg.strategy_lag_grid:
+        for cost_bp in cfg.strategy_cost_bp_grid:
+            result = backtest(w, factors, lag=lag, cost_bp=cost_bp, cfg=cfg)
+            assert np.allclose(result["turnover"].to_numpy(), 0.0, atol=1e-15)
+            assert np.allclose(result["cost"].to_numpy(), 0.0, atol=1e-15)
+            assert np.allclose(result["net_ret"].to_numpy(), result["gross_ret"].to_numpy(), atol=1e-15)
