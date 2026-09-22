@@ -129,7 +129,58 @@ def section_2(cfg: Config, pull: bool = False) -> None:
     log.info("features review chart written to %s", chart)
 
 
-section_3 = _not_built(3)
+def section_3(cfg: Config, pull: bool = False) -> None:
+    """Section 3: the four label sources, from features_z.parquet — steps 3.1 to 3.7.
+
+    Nothing here reads raw data or recomputes z (convention 3): every fit,
+    filter and smooth reads the same real-time z rows section 2 wrote.
+    """
+    import pandas as pd
+
+    from regime.features import model_input
+    from regime.models.gmm import run_expanding_gmm
+    from regime.models.hmm import (
+        hard_labels,
+        run_expanding_hmm,
+        run_smoothed_hmm,
+        select_k,
+    )
+    from regime.models.rules import rules_labels
+    from regime.tables import write_hmm_tables
+
+    log = logging.getLogger("regime")
+    raw = pd.read_parquet(cfg.outputs_features_raw)
+    z = pd.read_parquet(cfg.outputs_features_z)
+    x = model_input(z, cfg)
+    log.info("model input read: %d rows x %d columns, %s to %s", *x.shape, x.index[0].date(), x.index[-1].date())
+
+    labels = rules_labels(raw, cfg)                                         # 3.1
+    log.info("rules labels: %d rows, value counts %s", len(labels), labels.value_counts().sort_index().to_dict())
+
+    first_window = x.loc[x.index <= pd.Timestamp(cfg.sample_first_window_end)]
+    primary_K, bic_table = select_k(first_window, cfg)                      # 3.3
+    log.info("primary_K = %d from %d rows of the first window", primary_K, len(first_window))
+
+    filtered, params = run_expanding_hmm(x, primary_K, cfg)                 # 3.4
+    filtered_labels = hard_labels(filtered, cfg)
+    log.info(
+        "hmm filtered: %d dates, value counts %s, %d unassigned",
+        len(filtered_labels), filtered_labels["label"].value_counts().sort_index().to_dict(),
+        int((~filtered_labels["assigned"]).sum()),
+    )
+
+    smoothed, _smoothed_params = run_smoothed_hmm(x, primary_K, cfg)        # 3.5
+    smoothed_labels = hard_labels(smoothed, cfg)
+    log.info("hmm smoothed: %d dates, value counts %s", len(smoothed_labels), smoothed_labels["label"].value_counts().sort_index().to_dict())
+
+    gmm = run_expanding_gmm(x, primary_K, cfg)                              # 3.6
+    gmm_labels = hard_labels(gmm, cfg)
+    log.info("gmm filtered: %d dates, value counts %s", len(gmm_labels), gmm_labels["label"].value_counts().sort_index().to_dict())
+
+    write_hmm_tables(params, list(x.columns), cfg)                          # 3.7
+    log.info("hmm tables written for %d refits under %s", len(params), cfg.outputs_tables_dir)
+
+
 section_4 = _not_built(4)
 section_5 = _not_built(5)
 section_6 = _not_built(6)
