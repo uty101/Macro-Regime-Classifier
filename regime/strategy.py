@@ -82,3 +82,81 @@ def trailing_conditional_sharpe(
         raise KeyError(f"decision date {t} is not in the label index")
     label_t = labels.loc[t, "label"]
     return _trailing_from_joined(joined, pd.Timestamp(t), label_t, cfg)
+
+
+FALLBACK_UNASSIGNED = "unassigned"
+FALLBACK_THIN_REGIME = "thin_regime"
+FALLBACK_NO_POSITIVE = "no_positive_sharpe"
+FALLBACK_NONE = ""
+
+
+def static_weight(cfg: Config) -> float:
+    """``1 / len(universe)`` -- 0.2 over the five allocation factors, and every fallback's answer."""
+    return 1.0 / len(cfg.strategy_universe)
+
+
+def _weight_row(s: pd.Series, n_k: int, assigned: bool, eta: float, cfg: Config) -> tuple[np.ndarray, str]:
+    """One date's weight vector and the name of the branch that produced it.
+
+    Three fallbacks, all to the static vector: the date is unassigned, the
+    regime has fewer than ``cfg.strategy_min_regime_obs`` prior observations,
+    or no factor has a positive trailing Sharpe in it. Otherwise
+    ``w_f = (1 - eta) / 5 + eta * S+_f / sum_g S+_g`` with ``S+ = max(S, 0)``
+    and NaN read as 0.
+
+    The blend is a tilt, not a bet: every weight keeps ``(1 - eta) / 5`` of the
+    static vector however large the Sharpe that earned the tilt, so a single
+    thin regime cannot move a weight to 1.
+    """
+    universe = list(cfg.strategy_universe)
+    flat = np.full(len(universe), static_weight(cfg))
+    if not assigned:
+        return flat, FALLBACK_UNASSIGNED
+    if n_k < cfg.strategy_min_regime_obs:
+        return flat, FALLBACK_THIN_REGIME
+
+    positive = np.nan_to_num(s.to_numpy(dtype="float64"), nan=0.0)
+    positive = np.where(positive > 0, positive, 0.0)
+    total = float(positive.sum())
+    if total == 0.0:
+        return flat, FALLBACK_NO_POSITIVE
+
+    return (1.0 - eta) * flat + eta * positive / total, FALLBACK_NONE
+
+
+def weights(labels: pd.DataFrame, factors: pd.DataFrame, eta: float, cfg: Config) -> pd.DataFrame:
+    """The timed weight vector at every out-of-sample decision date. Rows sum to 1.
+
+    Index: the decision dates of ``join_next_return`` -- from
+    ``cfg.sample_first_window_end`` to the last date whose t+1 return exists.
+    Columns: ``cfg.strategy_universe`` (Mkt-RF is not allocable, convention 8).
+
+    Each row uses only decision dates strictly before its own, through
+    ``trailing_conditional_sharpe``. The first row therefore has no history at
+    all and falls back, as does every date in a regime the strategy has seen
+    fewer than ``cfg.strategy_min_regime_obs`` times.
+    """
+    joined = join_next_return(labels, factors, cfg)
+    universe = list(cfg.strategy_universe)
+
+    rows, branches = [], []
+    for t in joined.index:
+        assigned = bool(joined.at[t, "assigned"])
+        s, n_k = _trailing_from_joined(joined, t, joined.at[t, "label"], cfg)
+        row, branch = _weight_row(s, n_k, assigned, eta, cfg)
+        rows.append(row)
+        branches.append(branch)
+
+    frame = pd.DataFrame(rows, index=joined.index, columns=universe, dtype="float64")
+    frame.index.name = "date"
+    frame.attrs["fallback_branch"] = pd.Series(branches, index=joined.index, name="fallback_branch")
+    return frame
+
+
+def static_weights(index: pd.DatetimeIndex, cfg: Config) -> pd.DataFrame:
+    """``1 / len(universe)`` on every date of ``index``: the comparator the timed book is judged against."""
+    frame = pd.DataFrame(
+        static_weight(cfg), index=index, columns=list(cfg.strategy_universe), dtype="float64"
+    )
+    frame.index.name = "date"
+    return frame

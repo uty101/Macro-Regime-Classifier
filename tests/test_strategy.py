@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from regime.config import load_config
-from regime.strategy import trailing_conditional_sharpe
+from regime.strategy import _weight_row, static_weights, trailing_conditional_sharpe, weights
 
 UNIVERSE = ("SMB", "HML", "RMW", "CMA", "UMD")
 
@@ -122,3 +122,80 @@ def test_trailing_sharpe_excludes_unassigned_and_other_states():
     sample = np.array([0.01, 0.03, 0.005])
     for f in UNIVERSE:
         assert s[f] == pytest.approx(sample.mean() / sample.std(ddof=1) * np.sqrt(12.0), abs=1e-12)
+
+
+def test_fallback_unassigned():
+    """An unassigned date has no regime to condition on, so it holds the static vector."""
+    cfg = _cfg(strategy_min_regime_obs=1)
+    earned = [0.05, 0.04, 0.06, 0.03, 0.05, 0.04]
+    label_frame, factors = _frames([0] * 6, earned)
+    label_frame.iloc[-1, label_frame.columns.get_loc("assigned")] = False
+
+    w = weights(label_frame, factors, 1.0, cfg)
+
+    last = w.iloc[-1]
+    assert list(last) == pytest.approx([0.2] * 5, abs=1e-12)
+    assert w.attrs["fallback_branch"].iloc[-1] == "unassigned"
+
+
+def test_fallback_below_min_regime_obs():
+    """n_k below strategy.min_regime_obs is the static vector however good the trailing Sharpe."""
+    cfg = _cfg(strategy_min_regime_obs=24)
+    earned = [0.05, 0.04, 0.06, 0.03, 0.05, 0.04]
+    label_frame, factors = _frames([0] * 6, earned)
+
+    w = weights(label_frame, factors, 1.0, cfg)
+
+    assert np.allclose(w.to_numpy(), 0.2, atol=1e-12)
+    assert set(w.attrs["fallback_branch"]) == {"thin_regime"}
+
+
+def test_fallback_no_positive_sharpe():
+    """Every factor losing money in the regime leaves nothing to tilt towards."""
+    cfg = _cfg(strategy_min_regime_obs=2)
+    earned = [-0.05, -0.04, -0.06, -0.03, -0.05, -0.04]
+    label_frame, factors = _frames([0] * 6, earned)
+
+    w = weights(label_frame, factors, 1.0, cfg)
+
+    branch = w.attrs["fallback_branch"]
+    assert np.allclose(w.loc[branch == "no_positive_sharpe"].to_numpy(), 0.2, atol=1e-12)
+    assert (branch.iloc[2:] == "no_positive_sharpe").all()          # from the third date every S is negative
+    assert list(w.iloc[-1]) == pytest.approx([0.2] * 5, abs=1e-12)
+
+
+def test_blend_formula_by_hand():
+    """eta = 0.5, S = (0.8, -0.2, 0.4, 0.0, NaN) -> the blended vector, to 1e-12.
+
+    S+ is (0.8, 0, 0.4, 0, 0) and sums to 1.2. The negative, the exact zero and
+    the NaN all contribute nothing to the tilt and keep only their (1 - eta)/5
+    share, so three of the five weights are 0.1 and the two survivors split
+    0.5 in the ratio 2:1.
+    """
+    cfg = _cfg()
+    s = pd.Series([0.8, -0.2, 0.4, 0.0, np.nan], index=list(UNIVERSE), dtype="float64")
+
+    row, branch = _weight_row(s, n_k=cfg.strategy_min_regime_obs, assigned=True, eta=0.5, cfg=cfg)
+
+    expected = [0.1 + 0.5 * 0.8 / 1.2, 0.1, 0.1 + 0.5 * 0.4 / 1.2, 0.1, 0.1]
+    assert list(row) == pytest.approx(expected, abs=1e-12)
+    assert branch == ""
+    assert sum(row) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_weights_sum_to_one():
+    """Every row of every eta sums to 1, blended rows and fallback rows alike."""
+    cfg = _cfg(strategy_min_regime_obs=6)
+    rng = np.random.default_rng(cfg.run_seed)
+    earned = list(rng.normal(0.005, 0.03, size=60))
+    labels = list(rng.integers(0, 3, size=60))
+    label_frame, factors = _frames(labels, earned)
+    label_frame.iloc[::9, label_frame.columns.get_loc("assigned")] = False
+
+    for eta in cfg.strategy_eta_grid:
+        w = weights(label_frame, factors, eta, cfg)
+        assert list(w.columns) == list(UNIVERSE)
+        assert list(w.index) == list(label_frame.index)
+        assert np.allclose(w.sum(axis=1).to_numpy(), 1.0, atol=1e-12)
+        assert (w.to_numpy() >= 0).all()
+        assert set(w.attrs["fallback_branch"]) & {"unassigned"}
