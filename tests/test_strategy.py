@@ -12,8 +12,11 @@ from regime.config import load_config
 from regime.strategy import (
     _weight_row,
     backtest,
+    fallback_branches,
+    fill_timing_gain,
     run_timing_grid,
     static_weights,
+    timing_gain_bootstrap,
     trailing_conditional_sharpe,
     weights,
 )
@@ -142,7 +145,7 @@ def test_fallback_unassigned():
 
     last = w.iloc[-1]
     assert list(last) == pytest.approx([0.2] * 5, abs=1e-12)
-    assert w.attrs["fallback_branch"].iloc[-1] == "unassigned"
+    assert fallback_branches(w).iloc[-1] == "unassigned"
 
 
 def test_fallback_below_min_regime_obs():
@@ -154,7 +157,7 @@ def test_fallback_below_min_regime_obs():
     w = weights(label_frame, factors, 1.0, cfg)
 
     assert np.allclose(w.to_numpy(), 0.2, atol=1e-12)
-    assert set(w.attrs["fallback_branch"]) == {"thin_regime"}
+    assert set(fallback_branches(w)) == {"thin_regime"}
 
 
 def test_fallback_no_positive_sharpe():
@@ -165,7 +168,7 @@ def test_fallback_no_positive_sharpe():
 
     w = weights(label_frame, factors, 1.0, cfg)
 
-    branch = w.attrs["fallback_branch"]
+    branch = fallback_branches(w)
     assert np.allclose(w.loc[branch == "no_positive_sharpe"].to_numpy(), 0.2, atol=1e-12)
     assert (branch.iloc[2:] == "no_positive_sharpe").all()          # from the third date every S is negative
     assert list(w.iloc[-1]) == pytest.approx([0.2] * 5, abs=1e-12)
@@ -205,7 +208,7 @@ def test_weights_sum_to_one():
         assert list(w.index) == list(label_frame.index)
         assert np.allclose(w.sum(axis=1).to_numpy(), 1.0, atol=1e-12)
         assert (w.to_numpy() >= 0).all()
-        assert set(w.attrs["fallback_branch"]) & {"unassigned"}
+        assert set(fallback_branches(w)) & {"unassigned"}
 
 
 BACKTEST_INDEX = _months("2020-01-31", 5)
@@ -358,7 +361,7 @@ def test_timed_equals_static_when_all_sharpes_are_equal():
         w = weights(label_frame, factors, eta, cfg)
         assert np.allclose(w.to_numpy(), 0.2, atol=1e-12), eta
         # the blend branch was actually reached; this is not a test of the fallbacks
-        assert (w.attrs["fallback_branch"] == "").any(), eta
+        assert (fallback_branches(w) == "").any(), eta
 
         for lag in cfg.strategy_lag_grid:
             for cost_bp in cfg.strategy_cost_bp_grid:
@@ -366,3 +369,72 @@ def test_timed_equals_static_when_all_sharpes_are_equal():
                 static = backtest(static_weights(w.index, cfg), factors, lag, cost_bp, cfg)
                 assert np.allclose(timed["net_ret"].to_numpy(), static["net_ret"].to_numpy(), atol=1e-12)
                 assert np.allclose(timed["turnover"].to_numpy(), 0.0, atol=1e-12)
+
+
+def test_timing_gain_identical_series():
+    """A timed book identical to the static one has a gain of exactly 0 and never beats it.
+
+    Both series travel in the same bootstrap row, so every replication's
+    difference is 0 rather than merely centred on 0, and both percentiles are
+    0. ``p_one_sided`` counts replications with ``diff <= 0``, so an exactly
+    zero gain scores 1.0 -- the strongest possible statement that there is no
+    gain here.
+    """
+    cfg = _cfg(bootstrap_n_replications=50)
+    rng = np.random.default_rng(cfg.run_seed)
+    index = _months("2005-01-31", 60)
+    series = pd.Series(rng.normal(0.005, 0.03, size=60), index=index, name="net_ret")
+
+    result = timing_gain_bootstrap(series, series.copy(), cfg)
+
+    assert sorted(result) == ["diff", "p05", "p95", "p_one_sided"]
+    assert result["diff"] == pytest.approx(0.0, abs=1e-12)
+    assert result["p05"] == pytest.approx(0.0, abs=1e-12)
+    assert result["p95"] == pytest.approx(0.0, abs=1e-12)
+    assert result["p_one_sided"] == 1.0
+
+
+def test_timing_gain_reproducible():
+    cfg = _cfg(bootstrap_n_replications=50)
+    rng = np.random.default_rng(cfg.run_seed)
+    index = _months("2005-01-31", 60)
+    static = pd.Series(rng.normal(0.004, 0.03, size=60), index=index)
+    timed = pd.Series(rng.normal(0.006, 0.03, size=60), index=index)
+
+    first = timing_gain_bootstrap(static, timed, cfg)
+    second = timing_gain_bootstrap(static, timed, cfg)
+
+    assert first == second
+
+
+def test_timing_gain_is_signed_timed_minus_static():
+    """A timed series that simply pays more has a positive diff and a low p_one_sided."""
+    cfg = _cfg(bootstrap_n_replications=100)
+    rng = np.random.default_rng(cfg.run_seed)
+    index = _months("2005-01-31", 120)
+    base = rng.normal(0.003, 0.02, size=120)
+    static = pd.Series(base, index=index)
+    timed = pd.Series(base + 0.006, index=index)           # same shocks, a higher mean
+
+    result = timing_gain_bootstrap(static, timed, cfg)
+
+    assert result["diff"] > 0
+    assert result["p05"] <= result["p95"]
+    assert result["p_one_sided"] < 0.1
+
+
+def test_fill_timing_gain_completes_every_row():
+    cfg = _cfg(strategy_min_regime_obs=6, bootstrap_n_replications=25)
+    frames, factors = _grid_frames(cfg)
+    grid = run_timing_grid(frames, factors, cfg)
+
+    filled = fill_timing_gain(grid, frames, factors, cfg)
+
+    assert list(filled.columns) == list(grid.columns)
+    assert filled[["diff_p05", "diff_p95", "p_one_sided"]].notna().all().all()
+    assert (filled["diff_p05"] <= filled["diff_p95"]).all()
+    assert ((filled["p_one_sided"] >= 0) & (filled["p_one_sided"] <= 1)).all()
+    pd.testing.assert_frame_equal(
+        filled[["eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed", "diff"]],
+        grid[["eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed", "diff"]],
+    )

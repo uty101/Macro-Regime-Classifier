@@ -466,6 +466,7 @@ def section_5(cfg: Config, pull: bool = False) -> None:
 
     from regime.data.french import load_french
     from regime.strategy import (
+        fill_timing_gain,
         largest_turnover_months,
         run_timing_grid,
         timing_cells,
@@ -484,6 +485,7 @@ def section_5(cfg: Config, pull: bool = False) -> None:
     log.info("weight_deviation.csv written:\n%s", deviation.to_string(index=False))
 
     grid = run_timing_grid(sources, factors, cfg)                                                 # 5.3, 5.4
+    grid = fill_timing_gain(grid, sources, factors, cfg)                                          # 5.5
     grid.to_csv(cfg.outputs_timing_results, index=False)
     log.info("timing_results.csv written: %d rows", len(grid))
 

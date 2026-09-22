@@ -149,8 +149,16 @@ def weights(labels: pd.DataFrame, factors: pd.DataFrame, eta: float, cfg: Config
 
     frame = pd.DataFrame(rows, index=joined.index, columns=universe, dtype="float64")
     frame.index.name = "date"
-    frame.attrs["fallback_branch"] = pd.Series(branches, index=joined.index, name="fallback_branch")
+    # A tuple, not a Series: pandas compares attrs values with == when it merges
+    # two frames' metadata, and a Series there raises "truth value is ambiguous"
+    # the first time the book is concatenated with anything.
+    frame.attrs["fallback_branch"] = tuple(branches)
     return frame
+
+
+def fallback_branches(book: pd.DataFrame) -> pd.Series:
+    """The fallback branch that produced each row of a weight book, as a Series on its index."""
+    return pd.Series(book.attrs["fallback_branch"], index=book.index, name="fallback_branch")
 
 
 def static_weights(index: pd.DatetimeIndex, cfg: Config) -> pd.DataFrame:
@@ -214,7 +222,7 @@ def backtest(weights: pd.DataFrame, factors: pd.DataFrame, lag: int, cost_bp: fl
         {"gross_ret": gross, "turnover": turnover, "cost": cost, "net_ret": gross - cost},
         index=pd.DatetimeIndex(earning_months, name="date"),
     )
-    out.attrs["decision_date"] = pd.Series(decision_dates, index=out.index, name="decision_date")
+    out.attrs["decision_date"] = tuple(decision_dates)      # a tuple, for the same reason as above
     return out
 
 
@@ -322,3 +330,71 @@ def largest_turnover_months(result: pd.DataFrame, n: int = 10) -> pd.DataFrame:
         .head(n)
         .reset_index(drop=True)
     )
+
+
+def timing_gain_bootstrap(static: pd.Series, timed: pd.Series, cfg: Config) -> dict:
+    """``{"diff", "p05", "p95", "p_one_sided"}`` for one cell of the grid.
+
+    The two net-return series are aligned on the earning month and resampled
+    **together**: one row of the bootstrap array is one month's (static, timed)
+    pair, so every replication compares the two books over the same resampled
+    history. Resampling them independently would add the difference between two
+    samples of months to the difference between two strategies, which is the
+    entire quantity being measured.
+
+    ``p_one_sided`` is the share of replications whose ``diff`` is at or below
+    zero: the bootstrap's answer to "how often does the timing gain vanish?".
+    Identical series give 1.0, because every replication's difference is
+    exactly 0 and 0 <= 0.
+    """
+    from arch.bootstrap import StationaryBootstrap
+
+    frame = pd.concat([static.rename("static"), timed.rename("timed")], axis=1, join="inner")
+    if frame.isna().any().any():
+        raise ValueError("the static and timed net-return series do not align on the earning month")
+    arr = frame.to_numpy(dtype="float64")
+
+    observed = (
+        annualised_sharpe(arr[:, 1], cfg.features_ddof) - annualised_sharpe(arr[:, 0], cfg.features_ddof)
+    )
+
+    reps = cfg.bootstrap_n_replications
+    draws = np.full(reps, np.nan)
+    bootstrap = StationaryBootstrap(cfg.bootstrap_block_size, arr, seed=cfg.run_seed)
+    for r, ((draw,), _) in enumerate(bootstrap.bootstrap(reps)):
+        draws[r] = (
+            annualised_sharpe(draw[:, 1], cfg.features_ddof) - annualised_sharpe(draw[:, 0], cfg.features_ddof)
+        )
+
+    finite = draws[np.isfinite(draws)]
+    return {
+        "diff": observed,
+        "p05": float(np.nanquantile(draws, cfg.bootstrap_p_low)),
+        "p95": float(np.nanquantile(draws, cfg.bootstrap_p_high)),
+        "p_one_sided": float((finite <= 0).mean()) if len(finite) else float("nan"),
+    }
+
+
+def fill_timing_gain(
+    grid: pd.DataFrame, label_frames: dict[str, pd.DataFrame], factors: pd.DataFrame, cfg: Config
+) -> pd.DataFrame:
+    """``grid`` with ``diff_p05``, ``diff_p95`` and ``p_one_sided`` filled for all 72 rows.
+
+    ``diff`` is recomputed here from the bootstrap's own point estimate and
+    checked against the value ``run_timing_grid`` already wrote, so the two
+    paths through the same arithmetic cannot disagree silently.
+    """
+    cells = timing_cells(label_frames, factors, cfg)
+    out = grid.copy()
+    for position, row in enumerate(grid.itertuples(index=False)):
+        cell = cells[(row.eta, row.lag, row.cost_bp, row.source)]
+        result = timing_gain_bootstrap(cell["static"]["net_ret"], cell["timed"]["net_ret"], cfg)
+        if not np.isclose(result["diff"], row.diff, atol=1e-12, equal_nan=True):
+            raise ValueError(
+                f"diff disagrees for {(row.eta, row.lag, row.cost_bp, row.source)}: "
+                f"{result['diff']} from the bootstrap, {row.diff} from the grid"
+            )
+        out.iloc[position, out.columns.get_loc("diff_p05")] = result["p05"]
+        out.iloc[position, out.columns.get_loc("diff_p95")] = result["p95"]
+        out.iloc[position, out.columns.get_loc("p_one_sided")] = result["p_one_sided"]
+    return out
