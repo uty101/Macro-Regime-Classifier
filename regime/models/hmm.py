@@ -360,3 +360,41 @@ def run_expanding_hmm(
     out.parent.mkdir(parents=True, exist_ok=True)
     probs.to_csv(out, index=True, date_format="%Y-%m-%d")
     return probs, kept
+
+
+def run_smoothed_hmm(z: pd.DataFrame, K: int, cfg: Config) -> tuple[pd.DataFrame, HMMParams]:
+    """One fit on the whole sample, smoothed over the whole sample: the hindsight benchmark.
+
+    This is what the regimes look like to someone who already knows how the
+    sample ended — one fit on ``[features_from, sample_end]`` and
+    ``predict_proba`` over the full sequence, so every row uses every other
+    row. It is deliberate lookahead and exists only to bound what perfect
+    regime knowledge would have been worth. Nothing in the timed strategy may
+    read it (step 3.8 enforces that for ``strategy.py``).
+
+    Writes ``outputs/tables/hmm_restarts_smoothed.csv`` and
+    ``cfg.outputs_smoothed_probs``.
+    """
+    from regime.models.anchor import anchor
+
+    tables_dir = Path(cfg.outputs_tables_dir)
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    start, end = pd.Timestamp(cfg.sample_features_from), pd.Timestamp(cfg.sample_end)
+    train = z.loc[(z.index >= start) & (z.index <= end)]
+
+    params, restarts = fit_hmm(train.to_numpy(dtype="float64"), K, cfg, end)
+    params, _perm = anchor(params, list(z.columns), cfg)
+    restarts.to_csv(tables_dir / "hmm_restarts_smoothed.csv", index=False)
+    log.info(
+        "smoothed fit on %d rows to %s: kept loglik %.4f, n_iter %d, converged %s",
+        len(train), end.date(), params.loglik,
+        int(restarts.loc[restarts["loglik"].idxmax(), "n_iter"]), params.converged,
+    )
+
+    smoothed = model_from_params(params, cfg).predict_proba(train.to_numpy(dtype="float64"))
+    probs = pd.DataFrame(smoothed, index=train.index.copy(), columns=[f"p{k}" for k in range(K)])
+    probs.index.name = "date"
+    out = Path(cfg.outputs_smoothed_probs)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    probs.to_csv(out, index=True, date_format="%Y-%m-%d")
+    return probs, params

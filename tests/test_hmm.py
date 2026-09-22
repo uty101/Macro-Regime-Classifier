@@ -127,3 +127,40 @@ def test_filtered_is_fresh_full_history_pass(tmp_path) -> None:
     alpha, _ = forward_filter(history, params.startprob, params.transmat, params.means, params.covars)
 
     np.testing.assert_allclose(probs.loc[t, ["p0", "p1"]].to_numpy(dtype=float), alpha[-1], atol=1e-12)
+
+
+def test_smoothed_rows_sum_to_one_and_cover_all_model_input_dates(tmp_path) -> None:
+    from regime.models.hmm import run_smoothed_hmm
+
+    z = synthetic_z(CFG, T=60)
+    cfg = dataclasses.replace(
+        _short_cfg(tmp_path, z.index, z.index[35]),
+        outputs_smoothed_probs=str(tmp_path / "smoothed_probs.csv"),
+    )
+    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg)
+
+    assert list(probs.index) == list(z.index)          # every model-input date, not just the OOS ones
+    assert list(probs.columns) == ["p0", "p1"]
+    np.testing.assert_allclose(probs.to_numpy().sum(axis=1), 1.0, atol=1e-12)
+    assert params.refit_date == pd.Timestamp(cfg.sample_end)
+
+
+def test_smoothed_final_row_equals_forward_filter_final_row(tmp_path) -> None:
+    from regime.models.hmm import run_smoothed_hmm
+    from regime.models.hmm_numpy import forward_filter
+
+    z = synthetic_z(CFG, T=60)
+    cfg = dataclasses.replace(
+        _short_cfg(tmp_path, z.index, z.index[35]),
+        outputs_smoothed_probs=str(tmp_path / "smoothed_probs.csv"),
+    )
+    probs, params = run_smoothed_hmm(z, K=2, cfg=cfg)
+
+    alpha, _ = forward_filter(
+        z.to_numpy(), params.startprob, params.transmat, params.means, params.covars
+    )
+    # Convention 6 again, from the other side: the last row is the one place
+    # the smoother and the filter must agree, because there is no future left.
+    np.testing.assert_allclose(probs.iloc[-1].to_numpy(), alpha[-1], atol=1e-8)
+    # And they differ elsewhere, which is the whole reason the filter exists.
+    assert np.abs(probs.to_numpy()[:-1] - alpha[:-1]).max() > 1e-6
