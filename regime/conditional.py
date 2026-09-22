@@ -335,3 +335,105 @@ def unconditional_stats(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config
         n, ann_mean, ann_std, sharpe = _moments(returns[factor], cfg.features_ddof)
         rows.append((factor, n, ann_mean, ann_std, sharpe, low[fi], high[fi]))
     return pd.DataFrame(rows, columns=list(UNCONDITIONAL_COLUMNS))
+
+
+GAP_COLUMNS = ("factor", "state", "gap", "gap_p05", "gap_p95")
+
+
+def join_both(filt: pd.DataFrame, smooth: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """One frame carrying both label pairs and the t+1 returns, on the common out-of-sample dates.
+
+    ``label_f, assigned_f, label_s, assigned_s`` and one column per factor.
+    Both sources are joined to the *same* return columns, so the gap below is
+    a difference between two labellings of one return series and nothing else.
+    """
+    joined_f = join_next_return(filt, factors, cfg)
+    joined_s = join_next_return(smooth, factors, cfg)
+    common = joined_f.index.intersection(joined_s.index)
+
+    frame = pd.DataFrame(
+        {
+            "label_f": joined_f.loc[common, "label"],
+            "assigned_f": joined_f.loc[common, "assigned"],
+            "label_s": joined_s.loc[common, "label"],
+            "assigned_s": joined_s.loc[common, "assigned"],
+        },
+        index=common,
+    )
+    for factor in cfg.strategy_factors:
+        frame[factor] = joined_f.loc[common, factor]
+    frame.index.name = "date"
+    return frame
+
+
+def _gap_states(frame: pd.DataFrame) -> list[int]:
+    """The states either labelling assigns, ascending.
+
+    Smoothed and filtered state numbers already agree through chained
+    anchoring (convention 16), so state k means the same regime in both and
+    nothing is relabelled here.
+    """
+    filtered = frame.loc[frame["assigned_f"], "label_f"].dropna()
+    smoothed = frame.loc[frame["assigned_s"], "label_s"].dropna()
+    return sorted({int(k) for k in filtered.unique()} | {int(k) for k in smoothed.unique()})
+
+
+def _gap_matrix(frame_arr: np.ndarray, states: Sequence[int], n_factors: int, ddof: int) -> np.ndarray:
+    """(n_states, n_factors) smoothed-minus-filtered Sharpe for one sample.
+
+    ``frame_arr`` columns are label_f, assigned_f, label_s, assigned_s, then
+    the returns.
+    """
+    returns = frame_arr[:, 4:]
+    keep_f = frame_arr[:, 1] > 0.5
+    keep_s = frame_arr[:, 3] > 0.5
+    sharpe_f = _sharpe_by_state(frame_arr[keep_f, 0], returns[keep_f], states, ddof)
+    sharpe_s = _sharpe_by_state(frame_arr[keep_s, 2], returns[keep_s], states, ddof)
+    return sharpe_s - sharpe_f
+
+
+def filtered_smoothed_gap(
+    filt: pd.DataFrame, smooth: pd.DataFrame, factors: pd.DataFrame, cfg: Config
+) -> pd.DataFrame:
+    """How much of each conditional Sharpe is hindsight: smoothed minus filtered.
+
+    The filtered and smoothed labels are resampled in the *same* draw -- one
+    row of the bootstrap array carries both labellings and the returns -- so
+    each replication's gap is a like-for-like comparison on one resampled
+    history. Resampling the two separately would add a difference between two
+    samples to the difference between two labellings.
+
+    Columns ``factor, state, gap, gap_p05, gap_p95``; ``gap`` is the observed
+    difference, the percentiles are ``cfg.bootstrap_p_low`` and
+    ``cfg.bootstrap_p_high`` of the replications.
+    """
+    from arch.bootstrap import StationaryBootstrap
+
+    frame = join_both(filt, smooth, factors, cfg)
+    states = _gap_states(frame)
+    factor_names = list(cfg.strategy_factors)
+
+    arr = np.column_stack(
+        [
+            frame["label_f"].to_numpy(dtype="float64"),
+            frame["assigned_f"].to_numpy(dtype="float64"),
+            frame["label_s"].to_numpy(dtype="float64"),
+            frame["assigned_s"].to_numpy(dtype="float64"),
+            frame[factor_names].to_numpy(dtype="float64"),
+        ]
+    )
+    observed = _gap_matrix(arr, states, len(factor_names), cfg.features_ddof)
+
+    reps = cfg.bootstrap_n_replications
+    draws = np.full((reps, len(states), len(factor_names)), np.nan)
+    bootstrap = StationaryBootstrap(cfg.bootstrap_block_size, arr, seed=cfg.run_seed)
+    for r, ((draw,), _) in enumerate(bootstrap.bootstrap(reps)):
+        draws[r] = _gap_matrix(draw, states, len(factor_names), cfg.features_ddof)
+
+    low = np.nanquantile(draws, cfg.bootstrap_p_low, axis=0)
+    high = np.nanquantile(draws, cfg.bootstrap_p_high, axis=0)
+    rows = []
+    for fi, factor in enumerate(factor_names):
+        for si, state in enumerate(states):
+            rows.append((factor, state, observed[si, fi], low[si, fi], high[si, fi]))
+    return pd.DataFrame(rows, columns=list(GAP_COLUMNS))

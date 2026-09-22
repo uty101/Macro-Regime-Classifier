@@ -327,6 +327,7 @@ def section_4(cfg: Config, pull: bool = False) -> None:
         bootstrap_conditional,
         conditional_stats,
         conditional_stats_refit_split,
+        filtered_smoothed_gap,
         join_next_return,
         unassigned_dates,
         unconditional_stats,
@@ -385,6 +386,13 @@ def section_4(cfg: Config, pull: bool = False) -> None:
     pooled = unconditional_stats(sources[cfg.strategy_headline_source], factors, cfg)
     pooled.to_csv(tables / "unconditional_stats.csv", index=False)
     log.info("unconditional_stats.csv written:\n%s", pooled.to_string(index=False))
+
+    gap = filtered_smoothed_gap(sources["hmm_filtered"], sources["hmm_smoothed"], factors, cfg)  # 4.4
+    gap.to_csv(tables / "filtered_smoothed_gap.csv", index=False)
+    log.info(
+        "filtered_smoothed_gap.csv written: %d rows, mean absolute gap %.6f",
+        len(gap), float(gap["gap"].abs().mean()),
+    )
 
 
 section_5 = _not_built(5)

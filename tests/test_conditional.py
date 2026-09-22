@@ -14,6 +14,7 @@ from regime.conditional import (
     conditional_stats,
     conditional_stats_from_joined,
     excludes_zero,
+    filtered_smoothed_gap,
     state_pairs,
     unconditional_stats,
     join_next_return,
@@ -282,3 +283,63 @@ def test_unconditional_stats_uses_every_month_and_the_same_dates():
         assert row.ann_mean == pytest.approx(sample.mean() * 12, abs=1e-12)
         assert row.sharpe == pytest.approx(sample.mean() / sample.std(ddof=1) * np.sqrt(12), abs=1e-12)
         assert row.sharpe_p05 <= row.sharpe_p95
+
+
+def test_gap_is_zero_when_labels_identical():
+    """One labelling used twice has no hindsight in it, in every replication.
+
+    The filtered and smoothed labels travel in the same bootstrap row, so when
+    they are equal the two Sharpes are computed from the same draw and the gap
+    is exactly 0 -- not merely centred on 0.
+    """
+    cfg = _bootstrap_cfg()
+    rng = np.random.default_rng(cfg.run_seed)
+    labels = list(rng.integers(0, 3, size=60))
+    returns = {f: rng.normal(0.005, 0.03, size=60) for f in cfg.strategy_factors}
+    label_frame, factors, fwe = _labels_and_factors(labels, returns, cfg.strategy_factors)
+    cfg = dataclasses.replace(cfg, sample_first_window_end=fwe)
+
+    gap = filtered_smoothed_gap(label_frame, label_frame.copy(), factors, cfg)
+
+    assert list(gap.columns) == ["factor", "state", "gap", "gap_p05", "gap_p95"]
+    assert len(gap) == len(cfg.strategy_factors) * 3
+    for row in gap.itertuples(index=False):
+        assert row.gap == pytest.approx(0.0, abs=1e-12)
+        assert row.gap_p05 == pytest.approx(0.0, abs=1e-12)
+        assert row.gap_p95 == pytest.approx(0.0, abs=1e-12)
+
+
+def test_gap_sign_is_smoothed_minus_filtered():
+    """A smoothed labelling that sorts the good months into state 1 gives a positive gap there.
+
+    The filtered labelling alternates, so both its states hold two good and two
+    bad months and both its Sharpes are 0. The smoothed labelling has the four
+    good months in state 1 and the four bad ones in state 0. The gap must
+    therefore be positive in state 1 and negative in state 0: hindsight, and
+    signed smoothed minus filtered.
+    """
+    cfg = _bootstrap_cfg(bootstrap_n_replications=20)
+    good, bad = [0.04, 0.06, 0.05, 0.05], [-0.04, -0.06, -0.05, -0.05]
+    series = good + bad
+    n = len(series)
+    index = _months("2005-01-31", n)
+    filt = pd.DataFrame({"label": [0, 1, 0, 1, 0, 1, 0, 1], "assigned": [True] * n}, index=index)
+    smooth = pd.DataFrame({"label": [1, 1, 1, 1, 0, 0, 0, 0], "assigned": [True] * n}, index=index)
+    factors = pd.DataFrame(
+        {f: [0.0] + series for f in cfg.strategy_factors}, index=_months("2005-01-31", n + 1)
+    )
+    cfg = dataclasses.replace(cfg, sample_first_window_end="2005-01-31")
+
+    gap = filtered_smoothed_gap(filt, smooth, factors, cfg)
+
+    sqrt12 = np.sqrt(12.0)
+    for row in gap.itertuples(index=False):
+        filtered_sample = np.array(series[0::2] if row.state == 0 else series[1::2])
+        smoothed_sample = np.array(bad if row.state == 0 else good)
+        expected = (
+            smoothed_sample.mean() / smoothed_sample.std(ddof=1) * sqrt12
+            - filtered_sample.mean() / filtered_sample.std(ddof=1) * sqrt12
+        )
+        assert row.gap == pytest.approx(expected, abs=1e-12)
+    assert (gap.loc[gap.state == 1, "gap"] > 0).all()
+    assert (gap.loc[gap.state == 0, "gap"] < 0).all()
