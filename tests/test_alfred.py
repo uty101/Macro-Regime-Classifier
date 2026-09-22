@@ -73,3 +73,20 @@ def test_cpi_obs_month_is_t_minus_1() -> None:
     share = ok.mean()
     failing = pd.DataFrame({"decision_date": all_t[~ok], "latest_obs_month": latest[~ok].to_numpy()})
     assert share >= 0.95, f"{share:.4f} of decision dates have obs month t-1; failing:\n{failing.to_string()}"
+
+
+def test_missing_release_after_valid_gives_nan() -> None:
+    releases = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2000-01-01")] * 3,
+            "realtime_start": [pd.Timestamp("2000-01-15"), pd.Timestamp("2000-03-15"), pd.Timestamp("2000-05-15")],
+            "value": [10.0, np.nan, 12.0],
+        }
+    )
+    out = asof_from_releases(releases, pd.date_range("2000-01-31", "2000-05-31", freq="ME"))
+    got = out[out["obs_month"] == pd.Timestamp("2000-01-31")].set_index("decision_date")["value"]
+    assert got.loc[pd.Timestamp("2000-01-31")] == 10.0
+    assert got.loc[pd.Timestamp("2000-02-29")] == 10.0
+    assert np.isnan(got.loc[pd.Timestamp("2000-03-31")])
+    assert np.isnan(got.loc[pd.Timestamp("2000-04-30")])
+    assert got.loc[pd.Timestamp("2000-05-31")] == 12.0

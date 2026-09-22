@@ -2,7 +2,7 @@
 
 ## Section
 
-This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Config`, the `FredClient` raw-write conventions, the FRED market pulls and `month_end_market`, the ALFRED vintage pulls and `build_asof`, the French pull, the project 1 adapter, and the as-of panel `data/processed/asof_panel.parquet`. **Every step completed.** The section ran across three sittings because `FRED_API_KEY` was not available at first: 1.1 and 1.2 on 17 September (stopped before 1.3 as instructed), 1.5 and 1.6 on 18 September (the two steps that do not need FRED, built out of numeric order under rule 1's principle of finishing everything that does not depend on the blocker), and 1.3, 1.4 and 1.7 on 22 September once the key was supplied. The key was placed in the User environment scope; it is not in the repo and not in any committed file. Two intermediate review files were committed at the stops (`7cbe025`, `24322a6`); this file supersedes them.
+This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Config`, the `FredClient` raw-write conventions, the FRED market pulls and `month_end_market`, the ALFRED vintage pulls and `build_asof`, the French pull, the project 1 adapter, and the as-of panel `data/processed/asof_panel.parquet`. **Every step completed.** The section ran across three sittings because `FRED_API_KEY` was not available at first: 1.1 and 1.2 on 17 September (stopped before 1.3 as instructed), 1.5 and 1.6 on 18 September (the two steps that do not need FRED, built out of numeric order under rule 1's principle of finishing everything that does not depend on the blocker), and 1.3, 1.4 and 1.7 on 22 September once the key was supplied. The key was placed in the User environment scope; it is not in the repo and not in any committed file. Two intermediate review files were committed at the stops (`7cbe025`, `24322a6`); this file supersedes them. One revision after review: `asof_from_releases` forward-filled values across release dates, so a month whose latest release at t carried a missing value was served its earlier value instead of NaN; fixed in `section 1: as-of rule honours missing releases` (evidence below). The panel is unchanged by the fix.
 
 `python -m regime.run --section 1` rebuilds the three as-of tables and the panel from the pinned pull ids in about 20 seconds and is idempotent (the panel's SHA-256 is identical across two consecutive runs, shown below).
 
@@ -15,6 +15,8 @@ This is Section 1 of `PLAN.md` (steps 1.1 to 1.7): the package skeleton and `Con
 - `step 1.3: market series pulls and month_end_market with the 10-day lookback; pin fred.market_pull_id 20260922T004835Z` — `89b9992`
 - `step 1.4: ALFRED vintage pulls and build_asof with the as-of-t release rule; pin fred.vintage_pull_id 20260922T005041Z` — `c468292`
 - `step 1.7: build_asof_panel with the sixteen-column schema, planted-future-value and same-vintage lag tests` — `327b8db`
+
+- `section 1: as-of rule honours missing releases` — revision after review (hash in `git log`; this file is committed with it)
 
 (Listed in commit order; 1.5 and 1.6 precede 1.3 in history for the reason above.)
 
@@ -682,17 +684,142 @@ $ pytest -q
 28 passed in 2.59s
 ```
 
-## Tests run
+### Revision — the as-of rule honours missing releases: missing-after-valid rows per series, and the panel before and after the fix
 
-Final state of the repo (after the step 1.7 commit), from the repo root. `.venv` was created with `uv venv --python 3.11` and `uv pip install -e .` from `pyproject.toml`; no library outside `pyproject.toml` was installed and `uv.lock` was not created.
+Before the fix, `asof_from_releases` pivoted release values on `realtime_start` × `obs_month` and forward-filled the values, so a release carrying a missing value (FRED `.`) was skipped and the earlier value served. The fix stores a missing release as a sentinel (`np.inf`) before the forward fill, so what is carried down release dates is which release is latest, and maps the sentinel back to NaN afterwards. `tests/test_alfred.py::test_missing_release_after_valid_gives_nan` fixes the behaviour: 10.0 released 2000-01-15, missing 2000-03-15, 12.0 released 2000-05-15 gives 10.0 at 2000-01-31 and 2000-02-29, NaN at 2000-03-31 and 2000-04-30, 12.0 at 2000-05-31.
+
+Missing-after-valid release rows in the pinned raw files (a missing release for an observation month that had an earlier non-missing release), and the first affected INDPRO month's full release history as an example:
+
+```
+$ python ev_rev1.py   (first part)
+missing-after-valid release rows in the pinned raw files (a release with a missing value for an observation month that had an earlier non-missing release)
+  series  rows  missing_value_rows  missing_after_valid_rows  obs_months_affected first_such_release last_such_release
+CPIAUCSL  3362                 259                       258                  258         1972-08-22        1994-01-13
+  INDPRO 39362                 600                       600                  420         1928-01-27        2003-11-10
+  UNRATE  2198                   1                         0                    0               None              None
+
+example: INDPRO, first three missing-after-valid rows with the releases around them
+      date realtime_start   value
+1919-01-01     1927-01-26 83.0000
+1919-01-01     1928-01-27     NaN
+1919-01-01     1931-08-26 82.0000
+1919-01-01     1940-08-19 71.0000
+1919-01-01     1953-12-01 38.0000
+1919-01-01     1960-01-15 24.5000
+1919-01-01     1962-11-16 24.6000
+1919-01-01     1971-08-16     NaN
+1919-01-01     1972-11-15 13.9000
+1919-01-01     1985-07-18 10.2000
+1919-01-01     1990-04-17  8.0000
+1919-01-01     1997-01-27  7.6240
+1919-01-01     1997-12-09  7.6280
+1919-01-01     1999-08-17     NaN
+1919-01-01     2008-03-28  5.4412
+1919-01-01     2009-03-27  5.4404
+1919-01-01     2010-06-25  4.8404
+1919-01-01     2011-03-25  4.8502
+1919-01-01     2012-03-30  4.8605
+1919-01-01     2013-03-22  4.8575
+1919-01-01     2014-04-16  4.8582
+1919-01-01     2015-07-21  5.0354
+1919-01-01     2016-04-01  5.0585
+1919-01-01     2017-03-31  5.0346
+1919-01-01     2018-03-23  5.0124
+1919-01-01     2021-05-28  4.8902
+1919-01-01     2022-06-28  4.8773
+1919-01-01     2023-03-28  4.8665
+1919-01-01     2024-06-28  4.8654
+1919-01-01     2025-11-24  4.8739
+```
+
+CPIAUCSL 258, INDPRO 600, UNRATE 0 — the counts in the review request. (CPIAUCSL has 259 missing-value rows in total; the 259th is October 2025, whose only release is missing, so it was NaN before and after.)
+
+The three as-of tables were rebuilt with `python -m regime.run --section 1` (no `--pull`) and compared cell by cell with the tables built before the fix:
+
+```
+$ .venv/Scripts/python.exe -m regime.run --section 1
+INFO regime: UNRATE: as-of table 318780 rows, 440 decision dates
+INFO regime: project1: absent
+INFO regime: project1: 0 rows
+INFO regime: as-of panel written to data/processed/asof_panel.parquet: 439 rows x 16 columns
+```
+
+```
+as-of long tables before and after the fix (data/interim, regenerated): changed cells are months whose latest release at t is a missing release
+
+CPIAUCSL: 11472 changed cells of 324060; all changed cells NaN after: True
+  obs_month range of changed cells: 1970-12-31 .. 1992-05-31; decision_date range: 1990-01-31 .. 1994-01-31
+  gap in months between decision_date and obs_month for changed cells: min 17
+  first 3 and last 3 changed cells:
+decision_date  obs_month  value_before  value_after
+   1990-01-31 1970-12-31        119.03          NaN
+   1990-01-31 1971-01-31        119.36          NaN
+   1990-01-31 1971-02-28        119.65          NaN
+   1994-01-31 1992-03-31        139.30          NaN
+   1994-01-31 1992-04-30        139.70          NaN
+   1994-01-31 1992-05-31        139.90          NaN
+
+INDPRO: 2472 changed cells of 471900; all changed cells NaN after: True
+  obs_month range of changed cells: 1919-01-31 .. 1920-12-31; decision_date range: 1999-08-31 .. 2008-02-29
+  gap in months between decision_date and obs_month for changed cells: min 944
+  first 3 and last 3 changed cells:
+decision_date  obs_month  value_before  value_after
+   1999-08-31 1919-01-31         7.628          NaN
+   1999-08-31 1919-02-28         7.291          NaN
+   1999-08-31 1919-03-31         7.080          NaN
+   2008-02-29 1920-10-31         7.670          NaN
+   2008-02-29 1920-11-30         7.038          NaN
+   2008-02-29 1920-12-31         6.616          NaN
+
+UNRATE: 0 changed cells of 318780; all changed cells NaN after: n/a
+```
+
+Every changed cell is NaN after the fix, as the rule requires. The changed observation months are at least 17 months (CPIAUCSL) and 944 months (INDPRO) older than the decision date they change at; the panel reads only the latest month and its 3- or 12-month lag, so no panel cell can move. The 16 panel columns before and after, changed cells per column:
+
+```
+$ python ev_rev1.py   (last part)
+: changed cells per column
+          column  n_changed changed_dates
+           dgs10          0             -
+            dgs2          0             -
+        dtwexbgs          0             -
+          dtwexm          0             -
+             wti          0             -
+             vix          0             -
+          t10yie          0             -
+           cpi_m          0             -
+          cpi_m3          0             -
+        indpro_m          0             -
+      indpro_m12          0             -
+        unrate_m          0             -
+      unrate_m12          0             -
+   cpi_obs_month          0             -
+indpro_obs_month          0             -
+unrate_obs_month          0             -
+total changed cells: 0
+```
+
+Zero changed cells in every column, so there are no rows to show. The panel written by the revised code is byte-for-byte the one described under step 1.7.
+
+### Revision — `pytest -q` after the fix
 
 ```
 $ pytest -q
-............................                                             [100%]
-28 passed in 2.74s
+.............................                                            [100%]
+29 passed in 4.35s
 ```
 
-The 28 tests, by file: `test_config.py` (2: `test_config_keys_round_trip`, `test_config_is_frozen_and_typed`), `test_run.py` (2: `test_sections_registered_in_order`, `test_unbuilt_section_raises`), `test_fred_client.py` (5: `test_missing_api_key_raises`, `test_pull_id_format`, `test_write_raw_never_overwrites`, `test_manifest_appends`, `test_sha256_of_overrides_parquet_digest`), `test_market.py` (7: `test_lookback_rule` × 5 cases, `test_no_future_observation`, `test_index_runs_from_start_to_last_month_end`), `test_alfred.py` (4: `test_pinned_vintages_start_before_1995`, `test_value_used_has_realtime_start_le_t`, `test_no_release_before_t_gives_all_nan`, `test_cpi_obs_month_is_t_minus_1`), `test_french.py` (3: `test_parse_stops_at_first_blank_line`, `test_2010_01_row_matches_site`, `test_sample_end_is_momentum_last_month`), `test_project1.py` (2: `test_absent_returns_empty_schema_and_logs`, `test_present_round_trip`), `test_asof_panel.py` (3: `test_schema_matches_section_10`, `test_planted_future_market_value_is_ignored`, `test_lags_come_from_same_vintage`). Every test `PLAN.md` names is present; `test_unbuilt_section_raises`, `test_sha256_of_overrides_parquet_digest`, the fifth `test_lookback_rule` case (`latest_wins`), `test_index_runs_from_start_to_last_month_end` and `test_no_release_before_t_gives_all_nan` are additional. No test touches the network; tests that need pulled data read the committed pinned files and would fail, not skip, if absent.
+## Tests run
+
+Final state of the repo (after the revision commit), from the repo root. `.venv` was created with `uv venv --python 3.11` and `uv pip install -e .` from `pyproject.toml`; no library outside `pyproject.toml` was installed and `uv.lock` was not created.
+
+```
+$ pytest -q
+.............................                                            [100%]
+29 passed in 4.35s
+```
+
+The 29 tests, by file: `test_config.py` (2: `test_config_keys_round_trip`, `test_config_is_frozen_and_typed`), `test_run.py` (2: `test_sections_registered_in_order`, `test_unbuilt_section_raises`), `test_fred_client.py` (5: `test_missing_api_key_raises`, `test_pull_id_format`, `test_write_raw_never_overwrites`, `test_manifest_appends`, `test_sha256_of_overrides_parquet_digest`), `test_market.py` (7: `test_lookback_rule` × 5 cases, `test_no_future_observation`, `test_index_runs_from_start_to_last_month_end`), `test_alfred.py` (5: `test_pinned_vintages_start_before_1995`, `test_value_used_has_realtime_start_le_t`, `test_no_release_before_t_gives_all_nan`, `test_cpi_obs_month_is_t_minus_1`, `test_missing_release_after_valid_gives_nan`), `test_french.py` (3: `test_parse_stops_at_first_blank_line`, `test_2010_01_row_matches_site`, `test_sample_end_is_momentum_last_month`), `test_project1.py` (2: `test_absent_returns_empty_schema_and_logs`, `test_present_round_trip`), `test_asof_panel.py` (3: `test_schema_matches_section_10`, `test_planted_future_market_value_is_ignored`, `test_lags_come_from_same_vintage`). Every test `PLAN.md` names is present; `test_unbuilt_section_raises`, `test_sha256_of_overrides_parquet_digest`, the fifth `test_lookback_rule` case (`latest_wins`), `test_index_runs_from_start_to_last_month_end` and `test_no_release_before_t_gives_all_nan` are additional; `test_missing_release_after_valid_gives_nan` was added by the revision. No test touches the network; tests that need pulled data read the committed pinned files and would fail, not skip, if absent.
 
 Two test-side mistakes were made and fixed before their step's commit, recorded for completeness: in `test_value_used_has_realtime_start_le_t` an `iterrows` loop upcast a float NaN to `NaT` (pandas row upcasting on a row of two datetimes and a NaN), replaced by `itertuples`; in `test_planted_future_market_value_is_ignored` an extra assertion of mine expected the planted 1e6 to surface at a later month-end, which cannot happen in a daily series with a value every day, and was replaced by asserting the clean panel never contains it. Neither touched the code under test.
 
@@ -716,7 +843,6 @@ No step's active time approached the 20-minute threshold (`run.step_timeout_minu
 - `parse_french_csv` on a CSV whose monthly block is not the first block: both live files have the monthly block first and the parser takes the first comma-led header line; a differently ordered file would be parsed wrongly and is not guarded against.
 - `diff_french` against a genuinely different snapshot: only the empty self-diff was exercised; no second pull exists yet.
 - `write_raw` with a frame that has no `date` column writes blank `first_date`/`last_date`; every frame the plan specifies has a `date` column, so the branch is untested.
-- `asof_from_releases` when a release row carries a missing value (FRED `.`) for a month that had an earlier non-missing release: the pivot-and-forward-fill implementation would carry the earlier value forward past the missing release. The one such row in the pinned data (CPIAUCSL, October 2025, released 2025-12-18 as missing) has no earlier release, so it is NaN as required; no case of a missing release after a valid one was found or tested.
 - `month_end_market` for a series whose raw history ends before `sample.end` (DTWEXM): the series simply stops at its last month-end; the panel's reindex supplies the NaN. Tested only via the live data (`dtwexm` 79 NaN from 2020-01), not by a synthetic test.
 - The market lookback rule against the live series was checked only through the NaN pattern (no NaN in DGS10, DGS2, DCOILWTICO, VIXCLS; the expected gaps in DTWEXBGS and T10YIE); no month-end value was checked by hand against the FRED website.
 - `test_cpi_obs_month_is_t_minus_1` reads the as-of parquet in `data/interim/` if present and rebuilds it otherwise; a stale interim file from a different pull is not detected (the file name carries the pinned `pull_id`, so only a file with the same id could be stale).
@@ -762,13 +888,16 @@ Step 1.7 (`327b8db`):
 - modified `regime/data/asof.py` (`assemble_panel`, `build_asof_panel`), `regime/run.py` (`section_1`: French `--pull` with `diff_french`, `load_project1`, panel write)
 - added `tests/test_asof_panel.py`
 
+Revision (`section 1: as-of rule honours missing releases`):
+- modified `regime/data/alfred.py` (`asof_from_releases`: missing-release sentinel through the forward fill; module docstring), `tests/test_alfred.py` (added `test_missing_release_after_valid_gives_nan`), `review/section_1.md`
+
 Review: `review/section_1.md` (this file; earlier versions at `7cbe025` and `24322a6`).
 
 Generated and not committed (ignored): `data/interim/asof_{CPIAUCSL,INDPRO,UNRATE}_20260922T005041Z.parquet`, `data/processed/asof_panel.parquet`, `.venv/`. Untracked and untouched: `Project Outline/` (present before session 1).
 
 ## Reviewer reads
 
-1. `regime/data/alfred.py` — `asof_from_releases`: the pivot on `realtime_start` × `obs_month`, the forward fill down release dates, and `searchsorted(t, side="right") - 1` selecting the last release date ≤ t; the "no fallback to the current vintage" branch.
+1. `regime/data/alfred.py` — `asof_from_releases`: the pivot on `realtime_start` × `obs_month`, the `_MISSING` sentinel that lets a missing release survive the forward fill down release dates and is mapped back to NaN at the end, and `searchsorted(t, side="right") - 1` selecting the last release date ≤ t; the "no fallback to the current vintage" branch.
 2. `regime/data/asof.py` — `_revised_columns`: m is the latest non-NaN month in the as-of-t vintage and the lag is read from the same vintage by `MonthEnd(lag)`; the column order against section 10.
 3. `regime/data/fred.py` — `month_end_from_daily`: the window `t − lookback_days ≤ date ≤ t`, and that `pull_market`/`pull_vintages` share the client's single `pull_id`.
 4. `tests/test_asof_panel.py` and `tests/test_alfred.py` — that the planted-future and same-vintage tests exercise the rule (the value encodes its own `realtime_start`).
