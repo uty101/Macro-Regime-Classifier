@@ -15,6 +15,9 @@ are compared on identical dates.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+import numpy as np
 import pandas as pd
 
 from regime.config import Config
@@ -62,3 +65,103 @@ def join_next_return(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -
     joined.index.name = "date"
     return joined
 
+
+ANNUALISE = 12
+SQRT_ANNUALISE = float(np.sqrt(ANNUALISE))
+
+STATS_COLUMNS = ("factor", "state", "n", "ann_mean", "ann_std", "sharpe")
+REFIT_SPLIT_COLUMNS = ("factor", "state", "run_started_on_refit", "n", "ann_mean", "ann_std", "sharpe")
+
+
+def states_of(joined: pd.DataFrame) -> list[int]:
+    """The hard labels present among the assigned rows, ascending.
+
+    Read off the data rather than from ``primary_K`` so the same function
+    serves the four sources: ``rules`` has four states, the HMM and GMM have
+    ``primary_K``.
+    """
+    return sorted(int(k) for k in joined.loc[joined["assigned"], "label"].dropna().unique())
+
+
+def _moments(returns: pd.Series, ddof: int) -> tuple[int, float, float, float]:
+    """``n``, annualised mean, annualised standard deviation and Sharpe of one return sample."""
+    r = returns.dropna()
+    n = int(len(r))
+    if n < 2:
+        return n, float(r.mean()) * ANNUALISE if n else float("nan"), float("nan"), float("nan")
+    mean, sd = float(r.mean()), float(r.std(ddof=ddof))
+    sharpe = mean / sd * SQRT_ANNUALISE if sd > 0 else float("nan")
+    return n, mean * ANNUALISE, sd * SQRT_ANNUALISE, sharpe
+
+
+def conditional_stats_from_joined(joined: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """``factor, state, n, ann_mean, ann_std, sharpe`` over the assigned rows of a joined frame."""
+    use = joined.loc[joined["assigned"]]
+    rows = []
+    for factor in cfg.strategy_factors:
+        for state in states_of(joined):
+            n, ann_mean, ann_std, sharpe = _moments(use.loc[use["label"] == state, factor], cfg.features_ddof)
+            rows.append((factor, state, n, ann_mean, ann_std, sharpe))
+    return pd.DataFrame(rows, columns=list(STATS_COLUMNS))
+
+
+def conditional_stats(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DataFrame:
+    """Conditional factor statistics by hard label over the out-of-sample window.
+
+    Unassigned rows (max probability at or below ``cfg.hmm_assigned_threshold``)
+    are excluded; ``n`` is the number of assigned rows behind each cell and
+    appears on every row. Annualisation is x12 for the mean and x sqrt(12) for
+    the standard deviation and the Sharpe; the standard deviation uses
+    ``cfg.features_ddof``.
+    """
+    return conditional_stats_from_joined(join_next_return(labels, factors, cfg), cfg)
+
+
+def unassigned_dates(labels: pd.DataFrame, factors: pd.DataFrame, cfg: Config) -> pd.DatetimeIndex:
+    """The out-of-sample decision dates a source leaves unassigned, for the review file."""
+    joined = join_next_return(labels, factors, cfg)
+    return pd.DatetimeIndex(joined.index[~joined["assigned"].to_numpy(dtype=bool)], name="date")
+
+
+def run_started_on_refit(labels: pd.DataFrame, refits: Sequence[pd.Timestamp]) -> pd.Series:
+    """True at every date whose label run began on a refit date.
+
+    A run is a maximal block of consecutive equal labels in ``labels``; the
+    first row of the frame starts a run. The flag is carried forward from each
+    run's start, so it answers "was this regime first entered on the day the
+    model was refitted?" rather than "is today a refit date?".
+
+    This is the measurement the reviewer asked for in answer to Q1
+    (``decisions/section_3_review.md``): 45% of filtered label changes land on
+    a 31 December refit, and the cost of that is whatever separates the two
+    halves of this split.
+    """
+    label = labels["label"]
+    new_run = label.ne(label.shift())
+    new_run.iloc[0] = True
+    start = pd.Series(pd.NaT, index=label.index, dtype="datetime64[ns]")
+    start.loc[new_run] = label.index[new_run.to_numpy(dtype=bool)]
+    start = start.ffill()
+    flag = start.isin(pd.DatetimeIndex(refits))
+    flag.name = "run_started_on_refit"
+    flag.index.name = "date"
+    return flag
+
+
+def conditional_stats_refit_split(
+    labels: pd.DataFrame, factors: pd.DataFrame, refits: Sequence[pd.Timestamp], cfg: Config
+) -> pd.DataFrame:
+    """Conditional statistics by factor, state and ``run_started_on_refit``. Information only, no bootstrap."""
+    joined = join_next_return(labels, factors, cfg)
+    flag = run_started_on_refit(labels, refits).reindex(joined.index)
+    use = joined.loc[joined["assigned"]]
+    flagged = flag.reindex(use.index).astype(bool)
+
+    rows = []
+    for factor in cfg.strategy_factors:
+        for state in states_of(joined):
+            for value in (False, True):
+                mask = (use["label"] == state) & (flagged == value)
+                n, ann_mean, ann_std, sharpe = _moments(use.loc[mask, factor], cfg.features_ddof)
+                rows.append((factor, state, value, n, ann_mean, ann_std, sharpe))
+    return pd.DataFrame(rows, columns=list(REFIT_SPLIT_COLUMNS))

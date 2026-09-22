@@ -277,7 +277,91 @@ def _model_input_for(z, cfg: Config, name: str):
     return model_input(z, cfg, columns=feature_set_columns(cfg, name))
 
 
-section_4 = _not_built(4)
+def load_label_sources(cfg: Config) -> dict:
+    """The four label frames of ``cfg.strategy_label_sources``, each ``label, assigned`` indexed by date.
+
+    All four come from the primary feature set's main outputs. The three
+    probabilistic sources go through ``hard_labels`` (argmax, assigned = max
+    probability above ``cfg.hmm_assigned_threshold``); rules labels are always
+    assigned (PLAN.md's "Assigned" convention). State numbers already agree
+    across the three probabilistic sources through chained anchoring
+    (convention 16) and nothing here relabels anything.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.models.hmm import hard_labels
+
+    def _probs(path: str) -> pd.DataFrame:
+        frame = pd.read_csv(path, parse_dates=["date"]).set_index("date")
+        frame.index = pd.DatetimeIndex(frame.index, name="date")
+        return frame
+
+    rules = pd.read_parquet(_Path(cfg.outputs_processed_dir) / "rules_labels.parquet")
+    rules_labels_frame = pd.DataFrame(
+        {"label": rules["rules_label"].astype("int64"), "assigned": True}, index=rules.index
+    )
+    rules_labels_frame.index = pd.DatetimeIndex(rules_labels_frame.index, name="date")
+
+    return {
+        "hmm_filtered": hard_labels(_probs(cfg.outputs_filtered_probs), cfg),
+        "hmm_smoothed": hard_labels(_probs(cfg.outputs_smoothed_probs), cfg),
+        "gmm_filtered": hard_labels(_probs(cfg.outputs_gmm_filtered_probs), cfg),
+        "rules": rules_labels_frame,
+    }
+
+
+def section_4(cfg: Config, pull: bool = False) -> None:
+    """Section 4: conditional factor statistics by regime — steps 4.1 to 4.5.
+
+    The first step of the section that reads a factor return. Every statistic
+    is a function of ``join_next_return``'s frame, so the timing convention is
+    applied once and cannot be bypassed downstream.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.conditional import (
+        conditional_stats,
+        conditional_stats_refit_split,
+        join_next_return,
+        unassigned_dates,
+    )
+    from regime.data.french import load_french
+    from regime.models.hmm import refit_dates
+
+    log = logging.getLogger("regime")
+    tables = _Path(cfg.outputs_tables_dir)
+    tables.mkdir(parents=True, exist_ok=True)
+
+    factors = load_french(cfg.french_pull_id, cfg)
+    sources = load_label_sources(cfg)
+    log.info("factor file %s: %d months, %s to %s", cfg.french_pull_id, len(factors), factors.index[0].date(), factors.index[-1].date())
+
+    joined = {name: join_next_return(labels, factors, cfg) for name, labels in sources.items()}   # 4.1
+    for name in cfg.strategy_label_sources:
+        frame = joined[name]
+        log.info("%s: %d out-of-sample dates, %s to %s", name, len(frame), frame.index[0].date(), frame.index[-1].date())
+    spans = {name: (frame.index[0], frame.index[-1], len(frame)) for name, frame in joined.items()}
+    if len(set(spans.values())) != 1:
+        log.warning("label sources do not share identical out-of-sample dates: %s", spans)
+
+    for name in cfg.strategy_label_sources:                                                       # 4.2
+        stats = conditional_stats(sources[name], factors, cfg)
+        stats.to_csv(tables / f"conditional_stats_{name}.csv", index=False)
+        missing = unassigned_dates(sources[name], factors, cfg)
+        log.info("%s: %d unassigned out-of-sample dates%s", name, len(missing),
+                 f" ({', '.join(d.date().isoformat() for d in missing)})" if len(missing) else "")
+        log.info("conditional_stats_%s.csv written: %d rows", name, len(stats))
+
+    refits = refit_dates(cfg)
+    split = conditional_stats_refit_split(sources["hmm_filtered"], factors, refits, cfg)
+    split.to_csv(tables / "conditional_stats_refit_split.csv", index=False)
+    log.info("conditional_stats_refit_split.csv written: %d rows (hmm_filtered only, no bootstrap)", len(split))
+
+
 section_5 = _not_built(5)
 section_6 = _not_built(6)
 section_7 = _not_built(7)
