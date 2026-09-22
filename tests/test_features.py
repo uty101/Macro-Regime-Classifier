@@ -85,3 +85,45 @@ def test_lags_are_rows_not_days(tmp_path) -> None:
     assert chg.iloc[:12].isna().all()
     assert (chg.iloc[12:] == 12).all()
 
+
+# ---------------------------------------------------------------- step 2.2
+
+
+def test_dollar_splice_switches_exactly_at_splice_date(tmp_path) -> None:
+    cfg = _cfg(tmp_path)
+    lag = cfg.features_change_lag
+    splice = pd.Timestamp(cfg.features_dollar_splice_date)
+    index = pd.date_range("2005-01-31", "2008-12-31", freq="ME", name="date")
+    panel = _empty_panel(index)
+    rng = np.random.default_rng(cfg.run_seed)
+    panel["dtwexm"] = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, len(index))))
+    panel["dtwexbgs"] = 50 * np.exp(np.cumsum(rng.normal(0, 0.02, len(index))))
+    m = np.log(panel["dtwexm"] / panel["dtwexm"].shift(lag)) * 100
+    b = np.log(panel["dtwexbgs"] / panel["dtwexbgs"].shift(lag)) * 100
+
+    out = splice_dollar_chg12(panel, cfg)
+    before = index[index.get_loc(splice) - 1]
+    assert out.loc[before] == pytest.approx(m.loc[before], abs=1e-12)
+    assert out.loc[before] != pytest.approx(b.loc[before], abs=1e-6)
+    assert out.loc[splice] == pytest.approx(b.loc[splice], abs=1e-12)
+    assert out.loc[splice] != pytest.approx(m.loc[splice], abs=1e-6)
+    assert out.loc[index < splice].equals(m.loc[index < splice])
+    assert out.loc[index >= splice].equals(b.loc[index >= splice])
+
+
+def test_dollar_splice_has_no_level_jump(tmp_path) -> None:
+    """Same path, different base: a change splice is seamless, a level splice would jump at the splice date."""
+    cfg = _cfg(tmp_path)
+    lag = cfg.features_change_lag
+    index = pd.date_range("2005-01-31", "2008-12-31", freq="ME", name="date")
+    panel = _empty_panel(index)
+    rng = np.random.default_rng(cfg.run_seed)
+    panel["dtwexbgs"] = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, len(index))))
+    panel["dtwexm"] = 0.8 * panel["dtwexbgs"]
+    expected = np.log(panel["dtwexbgs"] / panel["dtwexbgs"].shift(lag)) * 100
+
+    out = splice_dollar_chg12(panel, cfg)
+    assert out.isna().equals(expected.isna())
+    assert out.iloc[:lag].isna().all() and out.iloc[lag:].notna().all()
+    np.testing.assert_allclose(out.dropna().to_numpy(), expected.dropna().to_numpy(), rtol=0, atol=1e-12)
+
