@@ -121,6 +121,27 @@ def label_runs(labels: pd.Series) -> pd.DataFrame:
     )
 
 
+def changes_on_refit_dates(filtered_labels: pd.DataFrame, refits) -> tuple[int, int, list]:
+    """``(n_changes, n_on_refit, the dates)`` of filtered label changes from ``DIAGNOSTICS_FROM``.
+
+    A label change that lands exactly on a refit date is a change the
+    classifier made because it was refitted, not because the data moved. The
+    first row of the frame has no predecessor and never counts as a change.
+
+    Section 6's robustness variants report this beside their timing number so
+    the classifier's behaviour travels with it, which is why it lives here
+    rather than inside ``classifier_diagnostics_row``.
+    """
+    labels = filtered_labels["label"]
+    changed = labels.ne(labels.shift())
+    changed.iloc[0] = False
+    change_dates = changed.index[changed.to_numpy()]
+    change_dates = change_dates[change_dates >= pd.Timestamp(DIAGNOSTICS_FROM)]
+    refit_set = {pd.Timestamp(d) for d in refits}
+    on_refit = [d for d in change_dates if d in refit_set]
+    return len(change_dates), len(on_refit), on_refit
+
+
 def classifier_diagnostics_row(
     feature_set: str,
     filtered_labels: pd.DataFrame,
@@ -142,12 +163,7 @@ def classifier_diagnostics_row(
     made because it was refitted, not because the data moved.
     """
     labels = filtered_labels["label"]
-    changed = labels.ne(labels.shift())
-    changed.iloc[0] = False
-    change_dates = changed.index[changed.to_numpy()]
-    change_dates = change_dates[change_dates >= pd.Timestamp(DIAGNOSTICS_FROM)]
-    refit_set = {pd.Timestamp(d) for d in refits}
-    on_refit = [d for d in change_dates if d in refit_set]
+    n_changes, n_on_refit, _dates = changes_on_refit_dates(filtered_labels, refits)
 
     finite = durations.loc[np.isfinite(durations["expected_duration"]), "expected_duration"]
     window = filtered_labels.index >= pd.Timestamp(DIAGNOSTICS_FROM)
@@ -159,9 +175,9 @@ def classifier_diagnostics_row(
 
     return {
         "feature_set": feature_set,
-        "n_filtered_changes": len(change_dates),
-        "n_changes_on_refit_dates": len(on_refit),
-        "share_on_refit_dates": (len(on_refit) / len(change_dates)) if len(change_dates) else float("nan"),
+        "n_filtered_changes": n_changes,
+        "n_changes_on_refit_dates": n_on_refit,
+        "share_on_refit_dates": (n_on_refit / n_changes) if n_changes else float("nan"),
         "median_run_months": float(label_runs(labels)["length"].median()),
         "max_expected_duration": float(finite.max()) if len(finite) else float("nan"),
         "n_infinite_durations": int((~np.isfinite(durations["expected_duration"])).sum()),

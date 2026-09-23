@@ -1,0 +1,5 @@
+K,n_free_parameters,status,detail
+2,90,completed,
+3,138,completed,
+4,188,completed,
+5,240,singular_covariance,"When `allow_singular is False`, the input matrix must be symmetric positive definite."
