@@ -837,6 +837,64 @@ def run_robustness_k(cfg: Config) -> None:
     append_robustness_summary(rows, cfg)
 
 
+def primary_k(cfg: Config) -> int:
+    """``primary_K`` as section 3's ``select_k`` wrote it to ``cfg.outputs_primary_k``.
+
+    Read from the file rather than recomputed: K is selected once, on the core
+    d = 8 first window, and every section 6 variant that is not itself a sweep
+    over K runs at that same K. Recomputing it here would let a variant
+    silently change K as well as the thing it is varying.
+    """
+    from pathlib import Path as _Path
+
+    path = _Path(cfg.outputs_primary_k)
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is absent; section 3 writes it and must run first")
+    return int(path.read_text(encoding="utf-8").strip())
+
+
+def run_robustness_diag(cfg: Config) -> None:
+    """Step 6.2 — the whole protocol at ``primary_K`` with ``covariance_type="diag"``.
+
+    ``dataclasses.replace(cfg, hmm_covariance_type="diag")`` and nothing else.
+    ``HMMParams.covars`` stays (K, d, d): hmmlearn's ``covars_`` property
+    returns full-shaped matrices for every covariance type, so
+    ``forward_filter`` and the anchoring are unchanged and this variant
+    differs from the main run only in what the fit was allowed to estimate.
+    BIC is not recomputed — K is ``primary_K``, chosen once on the full
+    covariance fit, and a diagonal model is not being offered the chance to
+    change it.
+
+    Outputs under ``robustness/diag/`` and
+    ``outputs/tables/timing_results_diag.csv``.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.config import primary_columns
+    from regime.data.french import load_french
+
+    log = logging.getLogger("regime")
+    z = pd.read_parquet(cfg.outputs_features_z)
+    factors = load_french(cfg.french_pull_id, cfg)
+    columns = primary_columns(cfg)
+    K = primary_k(cfg)
+
+    vcfg = robustness_cfg(
+        cfg, "diag", hmm_covariance_type="diag", strategy_label_sources=ROBUSTNESS_SOURCES
+    )
+    log.info("step 6.2: covariance_type=diag at K = %d into %s", K, vcfg.outputs_tables_dir)
+    run = variant_classifier(z, columns, K, vcfg)
+    n_excl = variant_conditional(run["labels"], factors, vcfg)
+    grid = variant_timing_grid(
+        run["labels"], factors, vcfg, str(_Path(cfg.outputs_tables_dir) / "timing_results_diag.csv")
+    )
+    row = variant_summary_row("diag", grid, run["labels"], factors, vcfg, n_excl)
+    log.info("step 6.2 headline-equivalent row:\n%s", pd.DataFrame([row]).to_string(index=False))
+    append_robustness_summary([row], cfg)
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -847,6 +905,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     behaviour beside its timing number so it can be read as one.
     """
     run_robustness_k(cfg)                                                                  # 6.1
+    run_robustness_diag(cfg)                                                               # 6.2
 
 
 section_7 = _not_built(7)

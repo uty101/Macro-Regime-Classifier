@@ -233,19 +233,54 @@ def refit_dates(cfg: Config) -> list[pd.Timestamp]:
     return dates
 
 
+def covars_for_setter(covars: np.ndarray, covariance_type: str) -> np.ndarray:
+    """Full-shaped (K, d, d) covariances in the shape hmmlearn's ``covars_`` *setter* wants.
+
+    hmmlearn's ``covars_`` getter and setter are not inverses. The getter
+    returns (K, d, d) for every covariance type — which is why ``HMMParams``
+    can hold one shape, and why ``forward_filter`` and the anchoring need no
+    knowledge of the covariance type at all. The setter validates against the
+    type's *internal* shape and rejects (K, d, d) for ``"diag"``, which is
+    what step 6.2's variant hit the first time it called ``predict_proba``.
+
+    So the full-shaped matrix is converted back here, and only here. For
+    ``"diag"`` that is its diagonal, and the off-diagonals are checked to be
+    zero first: they always are for a diagonal fit, and if they were not, the
+    conversion would be discarding fitted parameters rather than reshaping
+    them.
+    """
+    covars = np.asarray(covars, dtype="float64")
+    if covariance_type == "full":
+        return covars
+    if covariance_type == "diag":
+        diagonal = np.array([np.diag(c) for c in covars], dtype="float64")
+        off = covars - np.array([np.diag(d) for d in diagonal], dtype="float64")
+        if not np.allclose(off, 0.0, atol=1e-12):
+            raise ValueError(
+                f"diag covariances carry off-diagonal mass up to {np.abs(off).max():.3e}; "
+                "converting them to (K, d) would discard fitted parameters"
+            )
+        return diagonal
+    raise NotImplementedError(
+        f"covariance_type {covariance_type!r} has no covars_ setter conversion; "
+        "config.toml uses 'full' and 'diag' only"
+    )
+
+
 def model_from_params(params: HMMParams, cfg: Config) -> GaussianHMM:
     """A ``GaussianHMM`` carrying ``params`` verbatim, for ``predict_proba`` under anchored parameters.
 
     Nothing is fitted here: the arrays are assigned onto an unfitted model so
-    hmmlearn's own smoother can be called on the training rows. ``covars_`` is
-    set through ``covars_`` (full-shaped for every covariance type), which
-    hmmlearn converts back into its internal representation.
+    hmmlearn's own smoother can be called on the training rows. ``HMMParams``
+    always holds full-shaped covariances; ``covars_for_setter`` puts them back
+    into the shape hmmlearn's setter validates against, which for ``"full"``
+    is the same array.
     """
     model = GaussianHMM(n_components=params.K, covariance_type=cfg.hmm_covariance_type)
     model.startprob_ = params.startprob
     model.transmat_ = params.transmat
     model.means_ = params.means
-    model.covars_ = params.covars
+    model.covars_ = covars_for_setter(params.covars, cfg.hmm_covariance_type)
     return model
 
 

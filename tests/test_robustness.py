@@ -127,3 +127,77 @@ def test_k_variant_outcomes_cover_every_k_in_the_grid() -> None:
     completed = set(outcomes.loc[outcomes["status"] == "completed", "K"])
     summary = _read(f"{cfg.outputs_tables_dir}/robustness/robustness_summary.csv")
     assert {f"k{K}" for K in completed} <= set(summary["variant"])
+# --------------------------------------------------------------- step 6.2
+
+
+def test_diag_fit_covars_are_diagonal_full_shape() -> None:
+    """Step 6.2: a ``diag`` fit still returns (K, d, d) covariances, with zero off-diagonals.
+
+    This is the whole reason ``forward_filter`` and the anchoring need no
+    change for the diagonal variant: hmmlearn's ``covars_`` property returns
+    full-shaped matrices for every covariance type.
+    """
+    cfg = load_config()
+    vcfg = robustness_cfg(cfg, "diag", hmm_covariance_type="diag")
+    rng = np.random.default_rng(cfg.run_seed)
+    K, d, T = 2, 4, 200
+    means = np.array([[-2.0] * d, [2.0] * d])
+    draw = rng.standard_normal((T, d)) + means[rng.integers(0, K, T)]
+
+    from regime.models.hmm import fit_hmm
+
+    params, _restarts = fit_hmm(draw, K, vcfg, pd.Timestamp("2004-12-31"))
+    assert params.covars.shape == (K, d, d)
+    for k in range(K):
+        off = params.covars[k] - np.diag(np.diag(params.covars[k]))
+        assert np.allclose(off, 0.0), params.covars[k]
+        assert (np.diag(params.covars[k]) > 0).all()
+
+
+def test_diag_covars_round_trip_through_the_hmmlearn_setter() -> None:
+    """Step 6.2: a ``diag`` parameter set survives ``model_from_params`` and can be filtered.
+
+    hmmlearn's ``covars_`` getter returns (K, d, d) for every covariance type
+    but its setter rejects that shape for ``"diag"``. ``HMMParams`` holds one
+    shape throughout, so the conversion happens in exactly one place, and this
+    is what proves the two halves agree.
+    """
+    from regime.models.hmm import HMMParams, covars_for_setter, model_from_params
+    from regime.models.hmm_numpy import forward_filter
+
+    cfg = load_config()
+    vcfg = robustness_cfg(cfg, "diag", hmm_covariance_type="diag")
+    K, d = 3, 4
+    covars = np.array([np.diag(np.full(d, 0.5 + k)) for k in range(K)])
+    params = HMMParams(
+        startprob=np.full(K, 1.0 / K),
+        transmat=np.full((K, K), 1.0 / K),
+        means=np.arange(K * d, dtype="float64").reshape(K, d),
+        covars=covars,
+        K=K,
+        refit_date=pd.Timestamp("2004-12-31"),
+        loglik=0.0,
+        converged=True,
+    )
+    assert covars_for_setter(covars, "diag").shape == (K, d)
+    assert covars_for_setter(covars, "full").shape == (K, d, d)
+    model = model_from_params(params, vcfg)
+    # hmmlearn's covars_ getter needs n_features for the non-full types, which
+    # only fitting or a forward pass sets; _covars_ is what the setter stored.
+    assert np.allclose(np.asarray(model._covars_), np.diagonal(covars, axis1=1, axis2=2))
+
+    rng = np.random.default_rng(cfg.run_seed)
+    y = rng.standard_normal((20, d))
+    posterior = model.predict_proba(y)
+    assert posterior.shape == (20, K)
+    assert np.allclose(posterior.sum(axis=1), 1.0)
+    alpha, _loglik = forward_filter(y, params.startprob, params.transmat, params.means, params.covars)
+    assert alpha.shape == (20, K)
+    assert np.allclose(alpha.sum(axis=1), 1.0)
+
+    with pytest.raises(NotImplementedError, match="tied"):
+        covars_for_setter(covars, "tied")
+    with pytest.raises(ValueError, match="off-diagonal"):
+        dense = covars.copy()
+        dense[0, 0, 1] = 0.3
+        covars_for_setter(dense, "diag")
