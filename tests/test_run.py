@@ -12,9 +12,13 @@ def test_sections_registered_in_order() -> None:
 
 
 def test_unbuilt_section_raises() -> None:
+    from regime.run import _not_built
+
+    # Every section 1 to 7 is built as of section 7, so there is no registered
+    # section left to raise. The guard itself is still tested: a section that
+    # has not been written raises rather than silently doing nothing.
     from regime.config import load_config
 
     cfg = load_config()
-    # Section 6 is built as of this section; 7 is the first that is not.
-    with pytest.raises(NotImplementedError, match=r"^section 7 not built$"):
-        SECTIONS[7](cfg)
+    with pytest.raises(NotImplementedError, match=r"^section 8 not built$"):
+        _not_built(8)(cfg)

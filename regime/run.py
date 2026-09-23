@@ -1319,7 +1319,75 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     run_robustness_fragility(cfg)                                                          # 6.7
 
 
-section_7 = _not_built(7)
+# ---------------------------------------------------------------- section 7
+
+
+def write_charts(cfg: Config) -> dict:
+    """Step 7.1: the four PNGs of ``cfg.outputs_charts_dir``, and the legend strings.
+
+    The two heatmaps are written for ``hmm_filtered`` and ``hmm_smoothed``
+    because question 4 is the comparison of the two, and a reader who sees the
+    filtered heatmap alone has no way to tell how much of what is missing from
+    it is the classifier and how much is the factors.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.charts import conditional_sharpe_heatmap, regimes_timeline, timed_vs_static
+    from regime.data.french import load_french
+    from regime.strategy import backtest, static_weights, weights
+
+    log = logging.getLogger("regime")
+    charts = _Path(cfg.outputs_charts_dir)
+    charts.mkdir(parents=True, exist_ok=True)
+    tables = _Path(cfg.outputs_tables_dir)
+
+    panel_raw = pd.read_parquet(cfg.outputs_features_raw)
+    sources = load_label_sources(cfg)
+    drift = pd.read_csv(tables / "param_drift.csv")
+
+    regimes_timeline(
+        panel_raw, sources["hmm_filtered"], sources["hmm_smoothed"], drift,
+        str(charts / "regimes_timeline.png"), cfg,
+    )
+    legend = _chart_legend(drift, cfg)
+    log.info("regimes_timeline.png legend:\n%s", "\n".join(legend[k] for k in sorted(legend)))
+
+    for source, name in (("hmm_filtered", "filtered"), ("hmm_smoothed", "smoothed")):
+        stats = pd.read_csv(tables / f"conditional_stats_{source}.csv")
+        conditional_sharpe_heatmap(stats, str(charts / f"conditional_sharpe_{name}.png"), cfg)
+
+    factors = load_french(cfg.french_pull_id, cfg)
+    lag, cost_bp, eta = cfg.strategy_headline_lag, cfg.strategy_headline_cost_bp, cfg.strategy_headline_eta
+    filtered_book = weights(sources["hmm_filtered"], factors, eta, cfg)
+    smoothed_book = weights(sources["hmm_smoothed"], factors, eta, cfg)
+    backtests = {
+        "static": backtest(static_weights(filtered_book.index, cfg), factors, lag, cost_bp, cfg),
+        "timed_filtered": backtest(filtered_book, factors, lag, cost_bp, cfg),
+        "timed_smoothed": backtest(smoothed_book, factors, lag, cost_bp, cfg),
+    }
+    timed_vs_static(backtests, str(charts / "timed_vs_static.png"), cfg)
+    log.info("charts written to %s", charts)
+    return legend
+
+
+def _chart_legend(drift, cfg: Config) -> dict:
+    from regime.charts import state_legend_labels
+
+    return state_legend_labels(drift, cfg)
+
+
+def section_7(cfg: Config, pull: bool = False) -> None:
+    """Section 7: outputs and write-up — steps 7.1 to 7.3.
+
+    Step 7.4 is the README and is not code, so it is not run from here. This
+    section regenerates every chart and every table of the kickoff's section 8
+    from ``data/processed/``, so a clone that has run sections 1 to 6 can
+    rebuild the published outputs without refitting anything.
+    """
+    write_charts(cfg)                                                                      # 7.1
+
 
 SECTIONS: dict[int, Callable[[Config, bool], None]] = {
     1: section_1,
