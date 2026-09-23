@@ -145,6 +145,77 @@ def test_k_variant_outcomes_cover_every_k_in_the_grid() -> None:
     completed = set(outcomes.loc[outcomes["status"] == "completed", "K"])
     summary = _read(f"{cfg.outputs_tables_dir}/robustness/robustness_summary.csv")
     assert {f"k{K}" for K in completed} <= set(summary["variant"])
+
+
+SINGULAR_ERRORS = (
+    np.linalg.LinAlgError("Matrix is not positive definite"),
+    ValueError("component 4 of 'full' covars must be symmetric, positive-definite"),
+)
+
+
+def _k_variant_cfg(cfg: Config, tmp_path, K: int) -> Config:
+    """``cfg`` with a one-K grid, a synthetic z on disk and step 6.1's outputs under ``tmp_path``.
+
+    ``run_robustness_k`` reads ``outputs_features_z`` before the loop, and
+    ``data/processed/`` is never committed, so the z it reads is written here
+    (the variant never gets as far as using it: the fit is the thing being
+    made to raise).
+    """
+    z_path = tmp_path / "features_z.parquet"
+    _synthetic_z(cfg).to_parquet(z_path)
+    return dataclasses.replace(
+        cfg,
+        hmm_k_grid=(K,),
+        outputs_features_z=str(z_path),
+        outputs_tables_dir=str(tmp_path / "tables"),
+        outputs_regimes_dir=str(tmp_path / "regimes"),
+        outputs_processed_dir=str(tmp_path / "processed"),
+    )
+
+
+@pytest.mark.parametrize("error", SINGULAR_ERRORS, ids=lambda e: type(e).__name__)
+def test_singular_variant_is_recorded_not_raised(tmp_path, monkeypatch, error) -> None:
+    """Step 6.1 records a rank-deficient K and carries on, whichever exception says so.
+
+    ``forward_filter``'s Cholesky raises ``numpy.linalg.LinAlgError``; on
+    another BLAS hmmlearn's ``_validate_covars`` finds a non-positive
+    eigenvalue first and raises a plain ``ValueError``. The two are the same
+    condition, and an uncaught one aborts ``python -m regime.run`` inside step
+    6.1, so sections 6 and 7 never run.
+    """
+    from regime import run as run_module
+
+    cfg = _k_variant_cfg(load_config(), tmp_path, 5)
+
+    def _raise(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(run_module, "variant_classifier", _raise)
+    run_module.run_robustness_k(cfg)                      # returns: the run continues
+
+    outcomes = _read(f"{cfg.outputs_tables_dir}/robustness/k_variant_outcomes.csv")
+    assert list(outcomes.columns) == list(run_module.K_OUTCOME_COLUMNS)
+    assert outcomes["K"].tolist() == [5]
+    row = outcomes.iloc[0]
+    assert row["status"] == "singular_covariance"
+    assert row["detail"] == str(error)
+    print(outcomes.to_string(index=False))
+
+
+def test_a_variant_failure_that_is_not_singular_is_not_swallowed(tmp_path, monkeypatch) -> None:
+    """Every other exception stays uncaught, including every other ``ValueError``."""
+    from regime import run as run_module
+
+    cfg = _k_variant_cfg(load_config(), tmp_path, 5)
+
+    def _raise(*args, **kwargs):
+        raise ValueError("model_input: column dgs10_level is missing")
+
+    monkeypatch.setattr(run_module, "variant_classifier", _raise)
+    with pytest.raises(ValueError, match="column dgs10_level is missing"):
+        run_module.run_robustness_k(cfg)
+
+
 # --------------------------------------------------------------- step 6.2
 
 

@@ -575,6 +575,35 @@ ROBUSTNESS_SUMMARY = "robustness_summary.csv"
 K_OUTCOMES = "k_variant_outcomes.csv"
 K_OUTCOME_COLUMNS = ("K", "n_free_parameters", "status", "detail")
 
+# The message hmmlearn's ``_utils._validate_covars`` raises for a state
+# covariance that is not positive definite, for ``covariance_type="full"`` and
+# for ``"tied"``. Matched on the substring because the 'full' form names the
+# offending component: "component 4 of 'full' covars must be symmetric,
+# positive-definite".
+SINGULAR_COVARIANCE_MESSAGE = "positive-definite"
+
+
+def is_singular_covariance(error: BaseException) -> bool:
+    """True for the two ways a rank-deficient state covariance reaches step 6.1.
+
+    Which one is raised is a property of the linear algebra library, not of
+    the model. ``forward_filter``'s Cholesky raises
+    ``numpy.linalg.LinAlgError``; on another BLAS the eigenvalues hmmlearn
+    checks in ``_validate_covars`` come back non-positive first and it raises
+    a plain ``ValueError`` before the filter is ever reached. Both mean the
+    same fit is rank deficient and both are recorded as
+    ``singular_covariance``.
+
+    ``LinAlgError`` is itself a ``ValueError``, so the caller catches
+    ``ValueError`` and re-raises anything this rejects: no other exception is
+    swallowed.
+    """
+    import numpy as np
+
+    return isinstance(error, np.linalg.LinAlgError) or (
+        isinstance(error, ValueError) and SINGULAR_COVARIANCE_MESSAGE in str(error)
+    )
+
 
 def robustness_dir(cfg: Config):
     """``outputs/tables/robustness/`` — the shared parent of every variant folder."""
@@ -783,7 +812,6 @@ def run_robustness_k(cfg: Config) -> None:
     """
     from pathlib import Path as _Path
 
-    import numpy as np
     import pandas as pd
 
     from regime.config import primary_columns
@@ -803,12 +831,15 @@ def run_robustness_k(cfg: Config) -> None:
         log.info("step 6.1: K = %d into %s", K, vcfg.outputs_tables_dir)
         try:
             run = variant_classifier(z, columns, K, vcfg)
-        except np.linalg.LinAlgError as error:
+        except ValueError as error:
             # A rank-deficient state covariance: the filter refuses to evaluate
             # a Gaussian that is not positive definite rather than reaching for
             # a pseudo-inverse. Recorded as an outcome, not swallowed; the
             # decision about what to do with it is decisions/OPEN.md item 1 and
-            # is not taken here.
+            # is not taken here. Anything else raised by the variant, including
+            # any other ValueError, is re-raised untouched.
+            if not is_singular_covariance(error):
+                raise
             outcomes.append(
                 {
                     "K": K,
