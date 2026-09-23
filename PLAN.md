@@ -387,9 +387,11 @@ Every robustness run writes under `outputs/regimes/robustness/<name>/` and `outp
 
 **Builds.** `run_robustness_minobs(cfg)`: for each N in `cfg.strategy_min_regime_obs_grid`, the full 72-row grid with `dataclasses.replace(cfg, strategy_min_regime_obs=N)` and the main run's labels, with bootstrap intervals, to `outputs/tables/timing_results_minobs<N>.csv`.
 
-**Tests.** `tests/test_robustness.py::test_minobs_24_reproduces_main_grid` — the N = 24 file equals `timing_results.csv` exactly.
+Each file also carries, per N and beside the `diff`, `n_fallback`, `fallback_share` and `mean_abs_deviation` — the number and share of out-of-sample months the timed book left at 1/5, and the mean absolute deviation of its weights from 1/5 over every weight of every month — written to `outputs/tables/robustness/minobs_fallback.csv` (columns `min_regime_obs, source, eta, n_months, n_fallback, fallback_share, mean_abs_deviation`). Added by the reviewer's answer to section 5 Q2 (`decisions/section_5_review.md`): a larger `diff` at N = 12 is read as more trading, not more signal, unless the fallback share says otherwise.
 
-**Review evidence.** The headline row per N side by side; the fraction of fallback months per N.
+**Tests.** `tests/test_robustness.py::test_minobs_24_reproduces_main_grid` — the N = 24 file equals `timing_results.csv` exactly. `tests/test_robustness.py::test_minobs_fallback_share_falls_as_min_regime_obs_falls` — the headline source's `fallback_share` at N = 12 is no greater than at N = 24, and at N = 24 no greater than at N = 36.
+
+**Review evidence.** The headline row per N side by side; the fraction of fallback months per N, with `mean_abs_deviation` beside it.
 
 ### Step 6.5 — `block_size` ∈ {3, 6, 12} for the headline cell only
 
@@ -407,6 +409,24 @@ Every robustness run writes under `outputs/regimes/robustness/<name>/` and `outp
 **Tests.** `tests/test_robustness.py::test_nonprimary_model_input_is_the_other_feature_set` — the model input of the step 6.6 run has the columns of whichever set `features.primary` does not name, and never the same columns as the main run.
 
 **Review evidence.** The headline row of `timing_results_nolevel.csv` (or `_level.csv`) beside the main run's headline row; the count of conditional cells whose bootstrap interval excludes zero, for both runs.
+
+### Step 6.7 — fragility of the headline statistics
+
+Added by the reviewer's answer to section 5 Q3 (`decisions/section_5_review.md`). The headline `diff` flips sign when one month of 257 is dropped, and section 4's one pairwise difference that excludes zero leans on a single month; nothing else in this plan catches that class of fragility, and step 6.5 sweeps only `block_size`.
+
+**Builds.** `regime/robustness.py`:
+
+- `leave_one_month_out(timed: pd.Series, static: pd.Series, cfg) -> pd.DataFrame` — for each of the 257 earning months of the headline cell (η 0.5, lag 1, 20 bp, `hmm_filtered`), recompute `diff = sharpe(timed) − sharpe(static)` with that month dropped from **both** series; columns `dropped_month, diff, sign_flipped`.
+- `trimmed_diff(timed: pd.Series, static: pd.Series, trim: float = 0.05) -> float` — both Sharpes recomputed after removing the 5% of months with the largest absolute timed-minus-static difference, dropped from both series so they stay aligned.
+- `leave_one_month_out_pairwise(labels, factors, factor, state_a, state_b, cfg)` — the same two statistics applied to the one section 4 pairwise difference that excludes zero (`hmm_filtered`, UMD, state 0 against state 2): leave-one-month-out over the months of both states, and the 5% trimmed version.
+
+**Outputs.** `outputs/tables/robustness/leave_one_month_out_headline.csv`, `outputs/tables/robustness/leave_one_month_out_umd_0_2.csv`, and `outputs/tables/robustness/fragility_summary.csv` with one row per statistic: `statistic, full_value, loo_min, loo_max, n_sign_flips, share_sign_flips, trimmed_value, n_months`.
+
+**Tests.** `tests/test_robustness.py::test_loo_returns_one_row_per_month`. `tests/test_robustness.py::test_loo_full_value_matches_the_grid` — the un-dropped statistic equals `timing_results.csv`'s `diff` to 1e-12. `tests/test_robustness.py::test_trimmed_diff_drops_the_right_count_from_both_series`.
+
+**Review evidence.** `fragility_summary.csv` in full; the 10 months whose removal moves the headline `diff` most, with their timed and static net returns; the same for the UMD pair.
+
+**Runtime.** 6.7 is added to `run.long_steps` only if it exceeds 20 minutes; the session measures first.
 
 ---
 
@@ -438,7 +458,7 @@ Every robustness run writes under `outputs/regimes/robustness/<name>/` and `outp
 
 ### Step 7.4 — README answering the four questions
 
-**Builds.** `README.md` replaces "Results pending" with, in order: (1) the number of states chosen with the BIC table and the parameter stability across refits from `param_drift.csv` (one number: the maximum absolute drift of any anchored state mean across refits in z-units, with the refit dates that produced it); (2) whether factor premia differ by regime, answered with the count of **pairwise state differences** from `conditional_differences_<source>.csv` whose interval excludes 0 out of the total, for filtered and for smoothed — not the per-cell count of `conditional_stats_<source>.csv`, because a Sharpe that excludes zero in one state says only that the factor pays there, not that it pays *differently* — with `conditional_stats_refit_split.csv` and `conditional_refit_split_differences.csv` reported beside it, `excess_sharpe` reported beside `sharpe` wherever a conditional Sharpe is quoted, and `unconditional_stats.csv` as the pooled comparison; (3) the headline `timing_results.csv` row: `diff`, `[diff_p05, diff_p95]`, `p_one_sided`, before and after costs (the 20 bp row and the 10 bp row; lag 0 and lag 1); (4) the mean `gap` from `filtered_smoothed_gap.csv` and the headline timing `diff` for `hmm_smoothed` versus `hmm_filtered`. Then the three charts (the four PNGs), the headline row verbatim, a "What did not work" section (non-converged restarts, degenerate states, anchor disagreements, dropped rows, any `OPEN.md` items, the step 6.6 headline row reported next to the main headline row, and `outputs/tables/classifier_diagnostics.csv` in full with the pre-registered rule from `decisions/primary_feature_set.md` quoted beside it), and a "Limitations" section covering vintage coverage gaps (counts from step 1.4), `n_k` per regime (from the conditional tables), and unmodelled sleeve-internal turnover. Every number in the README is copied from a committed output file and names that file.
+**Builds.** `README.md` replaces "Results pending" with a **first paragraph stating the null**, before any of the four questions is worked through: the filtered classifier's labels move mostly at refits, it separates factor premia no better than chance, and no cell of the timing grid is distinguishable from zero. A reader who stops after that paragraph already has the result. Then, in order: (1) the number of states chosen with the BIC table and the parameter stability across refits from `param_drift.csv` (one number: the maximum absolute drift of any anchored state mean across refits in z-units, with the refit dates that produced it); (2) whether factor premia differ by regime, answered with the count of **pairwise state differences** from `conditional_differences_<source>.csv` whose interval excludes 0 out of the total, for filtered and for smoothed — not the per-cell count of `conditional_stats_<source>.csv`, because a Sharpe that excludes zero in one state says only that the factor pays there, not that it pays *differently* — with `conditional_stats_refit_split.csv` and `conditional_refit_split_differences.csv` reported beside it, `excess_sharpe` reported beside `sharpe` wherever a conditional Sharpe is quoted, and `unconditional_stats.csv` as the pooled comparison; (3) the headline `timing_results.csv` row: `diff`, `[diff_p05, diff_p95]`, `p_one_sided`, before and after costs (the 20 bp row and the 10 bp row; lag 0 and lag 1); (4) the mean `gap` from `filtered_smoothed_gap.csv` and the headline timing `diff` for `hmm_smoothed` versus `hmm_filtered`. Then the three charts (the four PNGs), the headline row verbatim, a "What did not work" section (non-converged restarts, degenerate states, anchor disagreements, dropped rows, any `OPEN.md` items, the step 6.6 headline row reported next to the main headline row, and `outputs/tables/classifier_diagnostics.csv` in full with the pre-registered rule from `decisions/primary_feature_set.md` quoted beside it), and a "Limitations" section covering vintage coverage gaps (counts from step 1.4), `n_k` per regime (from the conditional tables), and unmodelled sleeve-internal turnover. Every number in the README is copied from a committed output file and names that file.
 
 **Tests.** `tests/test_readme.py::test_readme_headline_numbers_match_outputs` — parses the headline row quoted in the README and compares it to `timing_results.csv`.
 
