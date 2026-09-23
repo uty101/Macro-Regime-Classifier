@@ -39,7 +39,7 @@ out of sample after a 1-month implementation lag and 20 bp of costs.
 
 ```bash
 python -m regime.run          # sections 1 to 7, from the pinned raw snapshots
-pytest -q                     # 129 tests
+pytest -q                     # 132 tests
 ```
 
 **The repo's raw data snapshots are pinned and committed.** `data/raw/` holds
@@ -534,3 +534,13 @@ design; the comparison table is in `review/section_7.md`. That is a
 same-machine property — floating-point output moves at the 1e-12 level across
 Python, BLAS and library versions — and is not a claim that a different
 environment produces the same bytes.
+
+**Verified independently.** The reviewer took a clean clone with `FRED_API_KEY`
+unset, on a different Python and a different BLAS build, and ran it: `pytest -q`
+gave 132 passed, and `python -m regime.run` completed end to end, writing all
+five charts and every table. The K = 5 robustness variant was recorded there as
+`status = singular_covariance` rather than being fatal — it raised a different
+exception on that stack, which is the case convention 17 and the addendum to
+`decisions/OPEN.md` item 1 describe. The headline row and
+`outputs/tables/robustness/fragility_summary.csv` matched the values committed
+here at every printed digit.
