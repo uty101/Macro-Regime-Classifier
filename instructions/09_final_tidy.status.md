@@ -170,5 +170,13 @@ appended to `OPEN.md`. Rule 1 was not engaged, rule 4 was not engaged.
 ## Final state
 
 ```
-GITLOG
+$ git log origin/main --oneline -3
+f80da71 09: status file
+43477b0 step 9.3: the README records the reviewer's independent clean-clone run
+83d473a step 9.2: convention 17 states what a clean clone guarantees and what it does not
 ```
+
+That is the log at the moment this file was first pushed. Filling this block
+in is itself one more commit, so the tip above is one behind the tip after it;
+rule 2 forbids amending a pushed commit, so it is a new commit rather than a
+rewrite. The log printed at the end of the session is the authoritative one.
