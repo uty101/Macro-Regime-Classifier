@@ -1033,6 +1033,81 @@ def run_robustness_minobs(cfg: Config) -> None:
     )
 
 
+def run_robustness_blocksize(cfg: Config) -> None:
+    """Step 6.5 — ``bootstrap.block_size`` over {3, 6, 12}, for the headline cell only.
+
+    Only the resampling changes. The weight book, the static comparator and
+    both net-return series are built once, outside the sweep, because none of
+    them depends on the block size: what is being varied is how much serial
+    dependence the interval is asked to carry, not what it is an interval
+    *of*. So every row's ``diff`` is identical by construction and only
+    ``diff_p05``, ``diff_p95`` and ``p_one_sided`` move.
+
+    b = 6 is the configured value, so that row reproduces the headline row of
+    ``timing_results.csv`` exactly, intervals included.
+
+    Writes ``outputs/tables/timing_results_blocksize.csv`` (``block_size`` +
+    the ``timing_results.csv`` columns) and
+    ``outputs/tables/conditional_stats_blocksize.csv`` (``block_size`` + the
+    nine conditional columns, ``hmm_filtered`` only).
+    """
+    import dataclasses
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.conditional import bootstrap_conditional
+    from regime.data.french import load_french
+    from regime.strategy import (
+        GRID_COLUMNS,
+        annualised_sharpe,
+        backtest,
+        static_weights,
+        timing_gain_bootstrap,
+        weights,
+    )
+
+    log = logging.getLogger("regime")
+    factors = load_french(cfg.french_pull_id, cfg)
+    sources = load_label_sources(cfg)
+    tables = _Path(cfg.outputs_tables_dir)
+
+    source = cfg.strategy_headline_source
+    eta, lag, cost_bp = cfg.strategy_headline_eta, cfg.strategy_headline_lag, cfg.strategy_headline_cost_bp
+    book = weights(sources[source], factors, eta, cfg)
+    timed = backtest(book, factors, lag, cost_bp, cfg)
+    static = backtest(static_weights(book.index, cfg), factors, lag, cost_bp, cfg)
+    if not timed.index.equals(static.index):
+        raise ValueError("the headline cell's timed and static earning months differ")
+    sharpe_static = annualised_sharpe(static["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+    sharpe_timed = annualised_sharpe(timed["net_ret"].to_numpy(dtype="float64"), cfg.features_ddof)
+
+    timing_rows, stats_frames = [], []
+    for block_size in cfg.bootstrap_block_size_grid:
+        bcfg = dataclasses.replace(cfg, bootstrap_block_size=block_size)
+        gain = timing_gain_bootstrap(static["net_ret"], timed["net_ret"], bcfg)
+        timing_rows.append(
+            (block_size, eta, lag, cost_bp, source, sharpe_static, sharpe_timed, gain["diff"],
+             gain["p05"], gain["p95"], gain["p_one_sided"],
+             float(timed["turnover"].mean()), int(len(timed)))
+        )
+        stats, _differences, _nan = bootstrap_conditional(sources[source], factors, bcfg, source=source)
+        stats.insert(0, "block_size", block_size)
+        stats_frames.append(stats)
+
+    timing = pd.DataFrame(timing_rows, columns=["block_size"] + list(GRID_COLUMNS))
+    timing.to_csv(tables / "timing_results_blocksize.csv", index=False)
+    log.info("timing_results_blocksize.csv written:\n%s", timing.to_string(index=False))
+
+    conditional = pd.concat(stats_frames, ignore_index=True)
+    conditional.to_csv(tables / "conditional_stats_blocksize.csv", index=False)
+    log.info(
+        "conditional_stats_blocksize.csv written: %d rows, %s excluding zero per block size",
+        len(conditional),
+        conditional.groupby("block_size")["excludes_zero"].sum().to_dict(),
+    )
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -1046,6 +1121,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     run_robustness_diag(cfg)                                                               # 6.2
     run_robustness_10feat(cfg)                                                             # 6.3
     run_robustness_minobs(cfg)                                                             # 6.4
+    run_robustness_blocksize(cfg)                                                          # 6.5
 
 
 section_7 = _not_built(7)

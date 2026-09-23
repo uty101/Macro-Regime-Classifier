@@ -266,3 +266,30 @@ def test_minobs_fallback_share_falls_as_min_regime_obs_falls() -> None:
         ordered = group.sort_values("min_regime_obs")
         shares = ordered["fallback_share"].to_numpy(dtype="float64")
         assert (np.diff(shares) >= -1e-12).all(), (source, eta, ordered.to_string(index=False))
+
+
+# --------------------------------------------------------------- step 6.5
+
+
+def test_blocksize_6_reproduces_headline_row() -> None:
+    """Step 6.5: b = 6 is the configured block size, so that row is the headline row."""
+    cfg = load_config()
+    assert cfg.bootstrap_block_size == 6
+    sweep = _read(f"{cfg.outputs_tables_dir}/timing_results_blocksize.csv")
+    row = sweep.loc[sweep["block_size"] == cfg.bootstrap_block_size]
+    assert len(row) == 1
+    row = row.iloc[0]
+
+    grid = _read(cfg.outputs_timing_results)
+    headline = grid.loc[
+        (grid["eta"] == cfg.strategy_headline_eta)
+        & (grid["lag"] == cfg.strategy_headline_lag)
+        & (grid["cost_bp"] == cfg.strategy_headline_cost_bp)
+        & (grid["source"] == cfg.strategy_headline_source)
+    ]
+    assert len(headline) == 1
+    headline = headline.iloc[0]
+    for column in ("sharpe_static", "sharpe_timed", "diff", "diff_p05", "diff_p95",
+                   "p_one_sided", "mean_turnover"):
+        assert float(row[column]) == pytest.approx(float(headline[column]), abs=1e-12), column
+    assert int(row["n_months"]) == int(headline["n_months"])
