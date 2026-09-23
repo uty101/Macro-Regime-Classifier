@@ -19,8 +19,14 @@ import pandas as pd
 import pytest
 
 from regime.config import Config, load_config
-from regime.models.hmm import hard_labels
-from regime.run import ROBUSTNESS_SOURCES, robustness_cfg
+from regime.features import model_input
+from regime.models.hmm import hard_labels, refit_dates
+from regime.run import (
+    ROBUSTNESS_SOURCES,
+    robustness_10feat_cfg,
+    robustness_10feat_columns,
+    robustness_cfg,
+)
 
 OUTPUT_FIELDS = tuple(
     f.name for f in dataclasses.fields(Config)
@@ -201,3 +207,33 @@ def test_diag_covars_round_trip_through_the_hmmlearn_setter() -> None:
         dense = covars.copy()
         dense[0, 0, 1] = 0.3
         covars_for_setter(dense, "diag")
+
+
+# --------------------------------------------------------------- step 6.3
+
+
+def test_10feat_model_input_has_ten_columns_from_2004_01_31(tmp_path) -> None:
+    """Step 6.3: the variant's model input is the ten ``core + robustness`` columns, from 2004-01-31."""
+    cfg = load_config()
+    vcfg = dataclasses.replace(
+        robustness_10feat_cfg(cfg), outputs_dropped_rows=str(tmp_path / "dropped.csv")
+    )
+    columns = robustness_10feat_columns(cfg)
+    assert len(columns) == 10
+    assert columns == tuple(cfg.features_core) + tuple(cfg.features_robustness)
+    assert len(set(columns)) == 10
+
+    x = model_input(_synthetic_z(cfg), vcfg, columns=columns)
+    assert list(x.columns) == list(columns)
+    assert x.index[0] == pd.Timestamp(cfg.sample_robustness_from) == pd.Timestamp("2004-01-31")
+    assert vcfg.hmm_covariance_type == cfg.hmm_robustness_covariance_type == "diag"
+
+
+def test_10feat_refit_dates_start_2009_12_31() -> None:
+    """Step 6.3: the variant refits from 2009-12-31, every December, and never before."""
+    cfg = load_config()
+    dates = refit_dates(robustness_10feat_cfg(cfg))
+    assert dates[0] == pd.Timestamp("2009-12-31") == pd.Timestamp(cfg.hmm_robustness_first_refit)
+    assert all(d.month == 12 and d.day == 31 for d in dates)
+    assert all(b.year - a.year == 1 for a, b in zip(dates, dates[1:]))
+    assert dates[0] > refit_dates(cfg)[0]

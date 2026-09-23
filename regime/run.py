@@ -895,6 +895,83 @@ def run_robustness_diag(cfg: Config) -> None:
     append_robustness_summary([row], cfg)
 
 
+def robustness_10feat_cfg(cfg: Config) -> Config:
+    """The step 6.3 variant config: 10 features, a 2004-01-31 start, a 2009-12-31 first refit, diagonal.
+
+    Convention 13 fixes all three replacements together, and they belong
+    together: a d = 10 model needs a longer first window than 2004 to 2005
+    gives, and a full-covariance d = 10 model has 201 parameters at K = 3, so
+    the covariance is diagonal. Separating them would produce a variant that
+    cannot be fitted, which is exactly what K = 5 does at d = 8
+    (``decisions/OPEN.md`` item 1).
+    """
+    return robustness_cfg(
+        cfg,
+        "10feat",
+        sample_features_from=cfg.sample_robustness_from,
+        sample_first_window_end=cfg.hmm_robustness_first_refit,
+        hmm_covariance_type=cfg.hmm_robustness_covariance_type,
+        strategy_label_sources=ROBUSTNESS_SOURCES,
+    )
+
+
+def robustness_10feat_columns(cfg: Config) -> tuple:
+    """``features.core`` + ``features.robustness`` — the ten model-input columns of step 6.3."""
+    return tuple(cfg.features_core) + tuple(cfg.features_robustness)
+
+
+def run_robustness_10feat(cfg: Config) -> None:
+    """Step 6.3 — the 10-feature run: `core` + `robustness`, from 2004-01-31, first refit 2009-12-31.
+
+    The z matrix is **not** recomputed. The standardised ``unrate_chg12`` and
+    ``breakeven_chg12`` columns are already in ``features_z.parquet`` and their
+    standardisation is unchanged — the step 2.3 rule over their own non-NaN
+    rows — so this run reads them exactly as the main run reads the core
+    eight (convention 3).
+
+    The out-of-sample window for this variant starts at its own first refit,
+    2009-12-31, because ``join_next_return`` reads
+    ``cfg.sample_first_window_end`` and this variant replaced it. Its
+    conditional statistics and its timing grid therefore cover a shorter
+    sample than the main run's, and its ``n_months`` in
+    ``robustness_summary.csv`` says so.
+
+    Outputs under ``robustness/10feat/`` and
+    ``outputs/tables/timing_results_10feat.csv``.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.data.french import load_french
+
+    log = logging.getLogger("regime")
+    z = pd.read_parquet(cfg.outputs_features_z)
+    factors = load_french(cfg.french_pull_id, cfg)
+    K = primary_k(cfg)
+
+    vcfg = robustness_10feat_cfg(cfg)
+    columns = robustness_10feat_columns(cfg)
+    log.info(
+        "step 6.3: d = %d from %s, first refit %s, covariance %s, K = %d into %s",
+        len(columns), vcfg.sample_features_from, vcfg.sample_first_window_end,
+        vcfg.hmm_covariance_type, K, vcfg.outputs_tables_dir,
+    )
+    run = variant_classifier(z, columns, K, vcfg)
+    log.info(
+        "step 6.3 model input: %d rows x %d columns, %s to %s",
+        *run["model_input"].shape, run["model_input"].index[0].date(),
+        run["model_input"].index[-1].date(),
+    )
+    n_excl = variant_conditional(run["labels"], factors, vcfg)
+    grid = variant_timing_grid(
+        run["labels"], factors, vcfg, str(_Path(cfg.outputs_tables_dir) / "timing_results_10feat.csv")
+    )
+    row = variant_summary_row("10feat", grid, run["labels"], factors, vcfg, n_excl)
+    log.info("step 6.3 headline-equivalent row:\n%s", pd.DataFrame([row]).to_string(index=False))
+    append_robustness_summary([row], cfg)
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -906,6 +983,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     """
     run_robustness_k(cfg)                                                                  # 6.1
     run_robustness_diag(cfg)                                                               # 6.2
+    run_robustness_10feat(cfg)                                                             # 6.3
 
 
 section_7 = _not_built(7)
