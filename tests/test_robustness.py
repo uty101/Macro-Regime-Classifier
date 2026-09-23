@@ -19,15 +19,26 @@ import pandas as pd
 import pytest
 
 from regime.config import Config, feature_set_columns, load_config, primary_columns
+from regime.conditional import join_next_return
 from regime.features import model_input
 from regime.models.hmm import hard_labels, refit_dates
+from regime.robustness import (
+    _trim_count,
+    leave_one_month_out,
+    leave_one_month_out_pairwise,
+    sharpe_difference,
+    trimmed_count,
+    trimmed_diff,
+)
 from regime.run import (
     ROBUSTNESS_SOURCES,
+    headline_net_returns,
     nonprimary_feature_set,
     robustness_10feat_cfg,
     robustness_10feat_columns,
     robustness_cfg,
 )
+from regime.strategy import annualised_sharpe
 
 OUTPUT_FIELDS = tuple(
     f.name for f in dataclasses.fields(Config)
@@ -316,3 +327,122 @@ def test_nonprimary_model_input_is_the_other_feature_set(tmp_path) -> None:
     assert list(x.columns) != list(primary_columns(cfg))
     # the non-primary set is the core eight minus dgs10_level, not a different eight
     assert set(columns) < set(primary_columns(cfg)) or set(primary_columns(cfg)) < set(columns)
+
+
+# --------------------------------------------------------------- step 6.7
+
+
+def _pair_series(n: int, seed: int) -> tuple[pd.Series, pd.Series]:
+    """Two net-return series on one index of ``n`` month-ends."""
+    rng = np.random.default_rng(seed)
+    index = pd.date_range("2005-01-31", periods=n, freq="ME", name="date")
+    return (
+        pd.Series(rng.normal(0.004, 0.02, n), index=index, name="timed"),
+        pd.Series(rng.normal(0.003, 0.02, n), index=index, name="static"),
+    )
+
+
+def test_loo_returns_one_row_per_month() -> None:
+    """Step 6.7: one row per earning month, in order, each dropping exactly that month."""
+    cfg = load_config()
+    timed, static = _pair_series(60, cfg.run_seed)
+    loo = leave_one_month_out(timed, static, cfg)
+
+    assert list(loo.columns) == ["dropped_month", "diff", "sign_flipped"]
+    assert len(loo) == len(timed) == 60
+    assert list(loo["dropped_month"]) == list(timed.index)
+    assert loo["diff"].notna().all()
+
+    # each row is the statistic over the other 59 months, not over all 60
+    full = sharpe_difference(timed.to_numpy(), static.to_numpy(), cfg)
+    for position in (0, 17, 59):
+        keep = timed.index != timed.index[position]
+        expected = sharpe_difference(
+            timed[keep].to_numpy(), static[keep].to_numpy(), cfg
+        )
+        assert float(loo["diff"].iloc[position]) == pytest.approx(expected, abs=1e-12)
+    assert not np.isclose(loo["diff"].to_numpy(), full, atol=1e-15).all()
+
+
+def test_loo_full_value_matches_the_grid() -> None:
+    """Step 6.7: the un-dropped statistic equals ``timing_results.csv``'s ``diff`` to 1e-12.
+
+    The point of step 6.7 is to perturb the *grid's* number. If the series it
+    perturbs were built differently from the ones the grid used, every LOO row
+    would be a fragility of something else, and nothing else in the section
+    would notice.
+    """
+    cfg = load_config()
+    labels = _headline_labels(cfg)
+    factors = _factors(cfg)
+    timed, static = headline_net_returns(cfg, {cfg.strategy_headline_source: labels}, factors)
+    full = sharpe_difference(timed.to_numpy(dtype="float64"), static.to_numpy(dtype="float64"), cfg)
+
+    grid = _read(cfg.outputs_timing_results)
+    headline = grid.loc[
+        (grid["eta"] == cfg.strategy_headline_eta)
+        & (grid["lag"] == cfg.strategy_headline_lag)
+        & (grid["cost_bp"] == cfg.strategy_headline_cost_bp)
+        & (grid["source"] == cfg.strategy_headline_source)
+    ].iloc[0]
+    assert full == pytest.approx(float(headline["diff"]), abs=1e-12)
+    assert len(timed) == int(headline["n_months"])
+
+    summary = _read(f"{cfg.outputs_tables_dir}/robustness/robustness_summary.csv")
+    assert "headline_diff" not in set(summary["variant"]), "6.7 is a diagnostic, not a variant"
+    fragility = _read(f"{cfg.outputs_tables_dir}/robustness/fragility_summary.csv")
+    row = fragility.loc[fragility["statistic"] == "headline_diff"].iloc[0]
+    assert float(row["full_value"]) == pytest.approx(full, abs=1e-12)
+    assert int(row["n_months"]) == len(timed)
+
+
+def test_trimmed_diff_drops_the_right_count_from_both_series() -> None:
+    """Step 6.7: the trim removes ``floor(0.05 n)`` months, the same ones from both series."""
+    cfg = load_config()
+    n = 257
+    timed, static = _pair_series(n, cfg.run_seed)
+    count = trimmed_count(timed, static)
+    assert count == _trim_count(n, 0.05) == 12
+    assert count / n <= 0.05
+
+    influence = (timed - static).abs()
+    dropped = influence.sort_values(ascending=False).index[:count]
+    keep = ~timed.index.isin(dropped)
+    assert int(keep.sum()) == n - count
+
+    expected = (
+        annualised_sharpe(timed[keep].to_numpy(), cfg.features_ddof)
+        - annualised_sharpe(static[keep].to_numpy(), cfg.features_ddof)
+    )
+    assert trimmed_diff(timed, static, cfg=cfg) == pytest.approx(expected, abs=1e-12)
+
+    # both series lose the same months: trimming only one would leave the two
+    # Sharpes computed over different samples, which is the error this guards
+    assert len(timed[keep]) == len(static[keep])
+    assert trimmed_diff(timed, static, trim=0.0, cfg=cfg) == pytest.approx(
+        sharpe_difference(timed.to_numpy(), static.to_numpy(), cfg), abs=1e-12
+    )
+
+
+def test_pairwise_loo_covers_the_months_of_both_states() -> None:
+    """Step 6.7: the pairwise table has one row per assigned month in either state, and no other."""
+    cfg = load_config()
+    labels = _headline_labels(cfg)
+    factors = _factors(cfg)
+    fragility = _read(f"{cfg.outputs_tables_dir}/robustness/fragility_summary.csv")
+    pairs = fragility.loc[fragility["statistic"] != "headline_diff"]
+    assert len(pairs) >= 1, "section 4 found a pairwise difference excluding zero; 6.7 must cover it"
+
+    differences = _read(
+        f"{cfg.outputs_tables_dir}/conditional_differences_{cfg.strategy_headline_source}.csv"
+    )
+    hit = differences.loc[differences["excludes_zero"].astype(bool)].iloc[0]
+    loo = leave_one_month_out_pairwise(
+        labels, factors, hit.factor, int(hit.state_a), int(hit.state_b), cfg
+    )
+    joined = join_next_return(labels, factors, cfg)
+    expected = joined.loc[
+        joined["assigned"] & joined["label"].isin([int(hit.state_a), int(hit.state_b)])
+    ]
+    assert len(loo) == len(expected) == int(hit.n_a) + int(hit.n_b)
+    assert list(loo["dropped_month"]) == list(expected.index)

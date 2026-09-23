@@ -1172,6 +1172,135 @@ def run_robustness_nonprimary(cfg: Config) -> None:
     append_robustness_summary([row], cfg)
 
 
+def headline_net_returns(cfg: Config, sources: dict, factors):
+    """The headline cell's ``(timed, static)`` net-return series, on one index of earning months.
+
+    Exactly the cell ``config.toml`` fixed before section 5 ran — eta
+    ``headline_eta``, lag ``headline_lag``, ``headline_cost_bp`` basis points,
+    source ``headline_source`` — rebuilt from the same three functions the
+    grid used, so step 6.7's statistics sit on the series the grid's ``diff``
+    came from and not on a second construction of them.
+    """
+    from regime.strategy import backtest, static_weights, weights
+
+    source = cfg.strategy_headline_source
+    book = weights(sources[source], factors, cfg.strategy_headline_eta, cfg)
+    lag, cost_bp = cfg.strategy_headline_lag, cfg.strategy_headline_cost_bp
+    timed = backtest(book, factors, lag, cost_bp, cfg)
+    static = backtest(static_weights(book.index, cfg), factors, lag, cost_bp, cfg)
+    if not timed.index.equals(static.index):
+        raise ValueError("the headline cell's timed and static earning months differ")
+    return timed["net_ret"], static["net_ret"]
+
+
+def excluding_zero_pairs(cfg: Config) -> list:
+    """The ``(factor, state_a, state_b)`` pairwise differences of the headline source that exclude zero.
+
+    Read from the committed ``conditional_differences_<headline_source>.csv``
+    rather than named in code, so step 6.7 cannot go on testing the fragility
+    of a difference that section 4 has stopped finding.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    path = _Path(cfg.outputs_tables_dir) / f"conditional_differences_{cfg.strategy_headline_source}.csv"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is absent; section 4 writes it and must run first")
+    table = pd.read_csv(path)
+    hit = table.loc[table["excludes_zero"].astype(bool)]
+    return [(row.factor, int(row.state_a), int(row.state_b)) for row in hit.itertuples(index=False)]
+
+
+def run_robustness_fragility(cfg: Config) -> None:
+    """Step 6.7 — how much of each headline statistic one month is carrying.
+
+    Two statistics, two treatments each. The headline timing ``diff`` and the
+    one section 4 pairwise state difference whose interval excludes zero are
+    each recomputed with every single month dropped in turn, and again with
+    the 5% most influential months removed.
+
+    Neither is a result and neither replaces the statistic it is about. What
+    they establish is the size of the statistic relative to the influence of
+    one month — the question section 5 raised when the headline ``diff``
+    changed sign on the removal of 2026-07-31, and section 4 raised when its
+    one interval excluding zero turned out to lean on 2009-03.
+
+    Writes ``leave_one_month_out_headline.csv``,
+    ``leave_one_month_out_<factor>_<a>_<b>.csv`` and ``fragility_summary.csv``
+    under ``outputs/tables/robustness/``.
+    """
+    import pandas as pd
+
+    from regime.data.french import load_french
+    from regime.robustness import (
+        FRAGILITY_COLUMNS,
+        fragility_row,
+        leave_one_month_out,
+        leave_one_month_out_pairwise,
+        most_influential,
+        sharpe_difference,
+        trimmed_diff,
+        trimmed_pairwise_diff,
+    )
+
+    log = logging.getLogger("regime")
+    factors = load_french(cfg.french_pull_id, cfg)
+    sources = load_label_sources(cfg)
+    out = robustness_dir(cfg)
+
+    timed, static = headline_net_returns(cfg, sources, factors)
+    full = sharpe_difference(
+        timed.to_numpy(dtype="float64"), static.to_numpy(dtype="float64"), cfg
+    )
+    loo = leave_one_month_out(timed, static, cfg)
+    loo.to_csv(out / "leave_one_month_out_headline.csv", index=False)
+    trimmed = trimmed_diff(timed, static, cfg=cfg)
+    rows = [fragility_row("headline_diff", full, loo, trimmed)]
+    log.info(
+        "step 6.7 headline diff %.6f over %d months; leaving one out moves it into [%.6f, %.6f], "
+        "%d removals flip its sign; trimmed %.6f",
+        full, len(loo), float(loo["diff"].min()), float(loo["diff"].max()),
+        int(loo["sign_flipped"].sum()), trimmed,
+    )
+    log.info(
+        "the 10 months whose removal moves the headline diff most:\n%s",
+        most_influential(loo, full).to_string(index=False),
+    )
+
+    pairs = excluding_zero_pairs(cfg)
+    log.info("step 6.7: %d pairwise differences of %s exclude zero: %s",
+             len(pairs), cfg.strategy_headline_source, pairs)
+    labels = sources[cfg.strategy_headline_source]
+    for factor, state_a, state_b in pairs:
+        pair_loo = leave_one_month_out_pairwise(labels, factors, factor, state_a, state_b, cfg)
+        name = f"leave_one_month_out_{factor.lower()}_{state_a}_{state_b}.csv"
+        pair_loo.to_csv(out / name, index=False)
+        pair_full = _pair_full_value(labels, factors, factor, state_a, state_b, cfg)
+        pair_trimmed = trimmed_pairwise_diff(labels, factors, factor, state_a, state_b, cfg)
+        rows.append(
+            fragility_row(f"{factor.lower()}_{state_a}_{state_b}_sharpe_diff",
+                          pair_full, pair_loo, pair_trimmed)
+        )
+        log.info("%s written: %d months\n%s", name, len(pair_loo),
+                 most_influential(pair_loo, pair_full).to_string(index=False))
+
+    summary = pd.DataFrame(rows, columns=list(FRAGILITY_COLUMNS))
+    summary.to_csv(out / "fragility_summary.csv", index=False)
+    log.info("fragility_summary.csv written:\n%s", summary.to_string(index=False))
+
+
+def _pair_full_value(labels, factors, factor: str, state_a: int, state_b: int, cfg: Config) -> float:
+    """``sharpe(state_b) − sharpe(state_a)`` over every month of the pair, no month dropped."""
+    from regime.robustness import _pair_difference, pairwise_months
+
+    months = pairwise_months(labels, factors, factor, state_a, state_b, cfg)
+    return _pair_difference(
+        months["state"].to_numpy(dtype="int64"), months["ret"].to_numpy(dtype="float64"),
+        state_a, state_b, cfg,
+    )
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -1187,6 +1316,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     run_robustness_minobs(cfg)                                                             # 6.4
     run_robustness_blocksize(cfg)                                                          # 6.5
     run_robustness_nonprimary(cfg)                                                         # 6.6
+    run_robustness_fragility(cfg)                                                          # 6.7
 
 
 section_7 = _not_built(7)
