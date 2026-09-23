@@ -68,3 +68,16 @@ reason: 240 free parameters on 192 training rows collapses a state onto a
 7-dimensional hyperplane, and `forward_filter` refusing a singular covariance
 is correct behaviour. The failure is the finding. See
 `decisions/section_6_review.md`, Q1. This item is kept, not deleted.
+
+**Addendum (session 9): the same rank deficiency surfaces as one of two
+exceptions depending on the library stack.** On the stack this repo was built
+on, scipy's positive-definite check raises
+`numpy.linalg.LinAlgError`, as quoted above. On another stack hmmlearn's own
+`_utils._validate_covars` rejects the fitted covariance first and raises
+`ValueError("component 4 of 'full' covars must be symmetric, positive-definite")`
+before `forward_filter` is ever reached. Both are the same finding — a state
+collapsed onto a hyperplane — and step 8.2 made `is_singular_covariance`
+recognise both, so K = 5 is recorded as `status = singular_covariance` in
+`k_variant_outcomes.csv` either way rather than aborting the run on one stack
+and not the other. The resolution is unchanged: Option A, report the failure,
+no pseudo-inverse, nothing in `regime/models/hmm_numpy.py` moves.
