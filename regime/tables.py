@@ -212,3 +212,114 @@ def primary_feature_set_decision(diagnostics: pd.DataFrame) -> str:
         and int(d7["n_changes_on_refit_dates"]) < int(d8["n_changes_on_refit_dates"])
     )
     return "core_no_level" if chooses_d7 else "core"
+
+
+REGIME_LABEL_COLUMNS = (
+    "rules_label", "hmm_filtered_label", "hmm_filtered_assigned",
+    "hmm_smoothed_label", "gmm_filtered_label",
+)
+
+
+def write_regime_labels(rules, hmm_filt, hmm_smooth, gmm_filt, cfg: Config) -> pd.DataFrame:
+    """The published regime series, one row per decision date from ``sample_start`` to ``sample_end``.
+
+    This is the file projects 7 and 9 consume, so it is written over the
+    **whole** decision-date index and not over the out-of-sample window: a
+    consumer asking what the regime was in 1997 gets an empty cell rather than
+    no row, and can tell the two apart. A label is empty wherever its source
+    has none — the filtered series begins at the first refit, the rules and
+    smoothed series at ``features_from`` — and ``hmm_filtered_assigned`` is
+    False on every date the filtered label is empty.
+
+    Four arguments, one per label source, each a ``label``/``assigned`` frame:
+    nothing here reads a file, so the caller decides which run's labels are
+    published and the function cannot silently publish the smoothed series in
+    the filtered column.
+    """
+    index = pd.date_range(pd.Timestamp(cfg.sample_start), pd.Timestamp(cfg.sample_end), freq="ME", name="date")
+
+    def labels_of(frame) -> pd.Series:
+        # Nullable Int64, not float: a state number is an integer and a
+        # consumer reading "0.0" for state 0 has to guess whether it is.
+        return frame["label"].reindex(index).astype("Int64")
+
+    table = pd.DataFrame(
+        {
+            "rules_label": labels_of(rules),
+            "hmm_filtered_label": labels_of(hmm_filt),
+            "hmm_filtered_assigned": hmm_filt["assigned"]
+            .reindex(index)
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool),
+            "hmm_smoothed_label": labels_of(hmm_smooth),
+            "gmm_filtered_label": labels_of(gmm_filt),
+        },
+        index=index,
+    )
+    table = table[list(REGIME_LABEL_COLUMNS)]
+    out = Path(cfg.outputs_regime_labels)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(out, index=True, index_label="date")
+    return table
+
+
+# The tables the kickoff's section 8 names, with the columns each must carry.
+# Section 8 asks for two tables — "transition matrix, expected durations, BIC
+# by K" and "timed minus static Sharpe for each eta, with and without lag,
+# with bootstrap p-values" — and section 9 asks for the regime series as a
+# published CSV. The transition matrices are one file per refit date and are
+# checked by glob, because their count is the number of refits and their
+# columns are ``to_0`` to ``to_{K-1}``.
+SECTION_8_TABLES: dict[str, tuple[str, ...]] = {
+    "expected_duration.csv": ("refit_date", "state", "expected_duration"),
+    "bic_by_k.csv": ("K", "loglik", "m", "T", "bic", "converged"),
+    "timing_results.csv": (
+        "eta", "lag", "cost_bp", "source", "sharpe_static", "sharpe_timed",
+        "diff", "diff_p05", "diff_p95", "p_one_sided", "mean_turnover", "n_months",
+    ),
+}
+
+CHECK_OUTPUTS_COLUMNS = ("path", "present", "columns_ok")
+
+
+def check_outputs(cfg: Config) -> pd.DataFrame:
+    """One row per section 8 table: ``path, present, columns_ok``.
+
+    ``columns_ok`` is False for a table that is absent, so a reader never has
+    to combine two columns to find out whether an output is usable. A
+    transition matrix carries its ``from_state`` index plus one ``to_k``
+    column per state, so it is checked for the index column and for at least
+    two ``to_`` columns rather than against a fixed list; every other table has
+    an exact column list in ``SECTION_8_TABLES``.
+    """
+    tables_dir = Path(cfg.outputs_tables_dir)
+    rows = []
+
+    def check(path: Path, required: tuple[str, ...]) -> None:
+        present = path.exists()
+        columns_ok = False
+        if present:
+            header = list(pd.read_csv(path, nrows=0).columns)
+            columns_ok = list(required) == header
+        rows.append({"path": path.as_posix(), "present": present, "columns_ok": columns_ok})
+
+    for name, required in SECTION_8_TABLES.items():
+        check(tables_dir / name, required)
+
+    for matrix in sorted(tables_dir.glob("transition_matrix_*.csv")):
+        header = list(pd.read_csv(matrix, nrows=0).columns)
+        rows.append(
+            {
+                "path": matrix.as_posix(),
+                "present": True,
+                "columns_ok": header[0] == "from_state"
+                and len(header) >= 3
+                and all(c.startswith("to_") for c in header[1:]),
+            }
+        )
+
+    labels = Path(cfg.outputs_regime_labels)
+    check(labels, ("date",) + REGIME_LABEL_COLUMNS)
+
+    return pd.DataFrame(rows, columns=list(CHECK_OUTPUTS_COLUMNS))

@@ -1378,6 +1378,34 @@ def _chart_legend(drift, cfg: Config) -> dict:
     return state_legend_labels(drift, cfg)
 
 
+def write_published_tables(cfg: Config):
+    """Step 7.2: ``regime_labels.csv``, then the section 8 completeness check.
+
+    The four label frames come from ``load_label_sources``, the same call
+    section 4 and section 5 make, so the published series is the series every
+    number in the write-up was computed from and not a second derivation of
+    it.
+    """
+    from pathlib import Path as _Path
+
+    from regime.tables import check_outputs, write_regime_labels
+
+    log = logging.getLogger("regime")
+    sources = load_label_sources(cfg)
+    labels = write_regime_labels(
+        sources["rules"], sources["hmm_filtered"], sources["hmm_smoothed"], sources["gmm_filtered"], cfg
+    )
+    log.info("regime_labels.csv written: %d rows\n%s", len(labels), labels.head(3).to_string())
+
+    checks = check_outputs(cfg)
+    log.info("check_outputs:\n%s", checks.to_string(index=False))
+    missing = checks.loc[~checks["present"] | ~checks["columns_ok"]]
+    if len(missing):
+        log.warning("section 8 tables not in order:\n%s", missing.to_string(index=False))
+    checks.to_csv(_Path(cfg.outputs_tables_dir) / "check_outputs.csv", index=False)
+    return labels, checks
+
+
 def section_7(cfg: Config, pull: bool = False) -> None:
     """Section 7: outputs and write-up — steps 7.1 to 7.3.
 
@@ -1387,6 +1415,7 @@ def section_7(cfg: Config, pull: bool = False) -> None:
     rebuild the published outputs without refitting anything.
     """
     write_charts(cfg)                                                                      # 7.1
+    write_published_tables(cfg)                                                            # 7.2
 
 
 SECTIONS: dict[int, Callable[[Config, bool], None]] = {

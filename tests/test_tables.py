@@ -135,3 +135,102 @@ def test_label_runs_lengths_and_starts() -> None:
     assert list(runs["length"]) == [2, 3, 1, 1]
     assert list(runs["start"]) == [index[0], index[2], index[5], index[6]]
     assert runs["length"].sum() == len(labels)
+
+
+# ---------------------------------------------------------------- step 7.2
+
+
+def _label_frame(index, values, assigned=None) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {"label": np.asarray(values, dtype="int64"),
+         "assigned": True if assigned is None else assigned},
+        index=index,
+    )
+    frame.index.name = "date"
+    return frame
+
+
+def test_regime_labels_schema_and_coverage(tmp_path) -> None:
+    from regime.tables import REGIME_LABEL_COLUMNS, write_regime_labels
+
+    cfg = dataclasses.replace(load_config(), outputs_regime_labels=str(tmp_path / "regime_labels.csv"))
+    full = pd.date_range(pd.Timestamp(cfg.sample_start), pd.Timestamp(cfg.sample_end), freq="ME", name="date")
+    rng = np.random.default_rng(cfg.run_seed)
+
+    # rules and smoothed run from features_from; filtered and the GMM only
+    # from the first refit, which is what the real sources do.
+    early = full[full >= pd.Timestamp(cfg.sample_features_from)]
+    late = full[full >= pd.Timestamp(cfg.sample_first_window_end)]
+    rules = _label_frame(early, rng.integers(0, 3, len(early)))
+    smooth = _label_frame(early, rng.integers(0, 3, len(early)))
+    assigned = rng.random(len(late)) > 0.2
+    filt = _label_frame(late, rng.integers(0, 3, len(late)), assigned=assigned)
+    gmm = _label_frame(late, rng.integers(0, 3, len(late)))
+
+    table = write_regime_labels(rules, filt, smooth, gmm, cfg)
+
+    assert list(table.columns) == list(REGIME_LABEL_COLUMNS)
+    assert table.index.equals(full) and len(table) == len(full)
+
+    # Empty exactly where the source has no row, and never elsewhere.
+    assert table["hmm_filtered_label"].notna().sum() == len(late)
+    assert table["gmm_filtered_label"].notna().sum() == len(late)
+    assert table["rules_label"].notna().sum() == len(early)
+    assert table["hmm_smoothed_label"].notna().sum() == len(early)
+    assert table.loc[table.index < pd.Timestamp(cfg.sample_first_window_end), "hmm_filtered_label"].isna().all()
+
+    # assigned is False on every date the filtered label is empty, and carries
+    # the source's own flag everywhere else.
+    unavailable = table["hmm_filtered_label"].isna()
+    assert not table.loc[unavailable, "hmm_filtered_assigned"].any()
+    assert table["hmm_filtered_assigned"].dtype == bool
+    assert (table.loc[late, "hmm_filtered_assigned"].to_numpy() == assigned).all()
+
+    written = pd.read_csv(tmp_path / "regime_labels.csv")
+    assert list(written.columns) == ["date"] + list(REGIME_LABEL_COLUMNS)
+    assert len(written) == len(full)
+    assert written["date"].iloc[0] == str(full[0].date()) and written["date"].iloc[-1] == str(full[-1].date())
+
+
+def test_check_outputs_lists_every_section_8_table(tmp_path) -> None:
+    from regime.tables import CHECK_OUTPUTS_COLUMNS, SECTION_8_TABLES, check_outputs
+
+    cfg = dataclasses.replace(
+        load_config(),
+        outputs_tables_dir=str(tmp_path / "tables"),
+        outputs_regime_labels=str(tmp_path / "regimes" / "regime_labels.csv"),
+    )
+    tables = tmp_path / "tables"
+    tables.mkdir()
+
+    # Nothing written yet: every section 8 table is absent and not columns_ok.
+    empty = check_outputs(cfg)
+    assert list(empty.columns) == list(CHECK_OUTPUTS_COLUMNS)
+    assert len(empty) == len(SECTION_8_TABLES) + 1  # + regime_labels.csv, no matrices yet
+    assert not empty["present"].any() and not empty["columns_ok"].any()
+
+    for name, columns in SECTION_8_TABLES.items():
+        pd.DataFrame(columns=list(columns)).to_csv(tables / name, index=False)
+    for refit in ("2004-12-31", "2005-12-31"):
+        pd.DataFrame(
+            [[1.0, 0.0, 0.0]], index=pd.Index([0], name="from_state"), columns=["to_0", "to_1", "to_2"]
+        ).to_csv(tables / f"transition_matrix_{refit}.csv")
+    labels = tmp_path / "regimes" / "regime_labels.csv"
+    labels.parent.mkdir()
+    from regime.tables import REGIME_LABEL_COLUMNS
+
+    pd.DataFrame(columns=["date"] + list(REGIME_LABEL_COLUMNS)).to_csv(labels, index=False)
+
+    full = check_outputs(cfg)
+    assert len(full) == len(SECTION_8_TABLES) + 2 + 1
+    assert full["present"].all() and full["columns_ok"].all()
+    assert sum("transition_matrix_" in p for p in full["path"]) == 2
+    for name in SECTION_8_TABLES:
+        assert any(p.endswith(name) for p in full["path"]), name
+    assert any(p.endswith("regime_labels.csv") for p in full["path"])
+
+    # A table with the right name and the wrong columns is present, not ok.
+    pd.DataFrame(columns=["K", "bic"]).to_csv(tables / "bic_by_k.csv", index=False)
+    wrong = check_outputs(cfg).set_index("path")
+    row = wrong.loc[(tables / "bic_by_k.csv").as_posix()]
+    assert bool(row["present"]) and not bool(row["columns_ok"])
