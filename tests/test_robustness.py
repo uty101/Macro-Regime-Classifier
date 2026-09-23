@@ -237,3 +237,32 @@ def test_10feat_refit_dates_start_2009_12_31() -> None:
     assert all(d.month == 12 and d.day == 31 for d in dates)
     assert all(b.year - a.year == 1 for a, b in zip(dates, dates[1:]))
     assert dates[0] > refit_dates(cfg)[0]
+
+
+# --------------------------------------------------------------- step 6.4
+
+
+def test_minobs_24_reproduces_main_grid() -> None:
+    """Step 6.4: the N = 24 file is ``timing_results.csv``. 24 is the configured value."""
+    cfg = load_config()
+    assert cfg.strategy_min_regime_obs == 24
+    main = _read(cfg.outputs_timing_results)
+    variant = _read(f"{cfg.outputs_tables_dir}/timing_results_minobs24.csv")
+    pd.testing.assert_frame_equal(main, variant)
+
+
+def test_minobs_fallback_share_falls_as_min_regime_obs_falls() -> None:
+    """Step 6.4: a lower threshold cannot put more months into fallback.
+
+    The thin-regime branch fires on ``n_k(t) < min_regime_obs``, so lowering
+    the threshold can only remove months from it; the other two branches do
+    not depend on it at all. A table that said otherwise would mean the
+    threshold was not the only thing that moved.
+    """
+    cfg = load_config()
+    table = _read(f"{cfg.outputs_tables_dir}/robustness/minobs_fallback.csv")
+    assert sorted(table["min_regime_obs"].unique()) == sorted(cfg.strategy_min_regime_obs_grid)
+    for (source, eta), group in table.groupby(["source", "eta"]):
+        ordered = group.sort_values("min_regime_obs")
+        shares = ordered["fallback_share"].to_numpy(dtype="float64")
+        assert (np.diff(shares) >= -1e-12).all(), (source, eta, ordered.to_string(index=False))

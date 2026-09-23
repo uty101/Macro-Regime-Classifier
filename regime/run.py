@@ -972,6 +972,67 @@ def run_robustness_10feat(cfg: Config) -> None:
     append_robustness_summary([row], cfg)
 
 
+MINOBS_FALLBACK_COLUMNS = (
+    "min_regime_obs", "source", "eta", "n_months", "n_fallback", "fallback_share", "mean_abs_deviation",
+)
+
+
+def run_robustness_minobs(cfg: Config) -> None:
+    """Step 6.4 — the full 72-row grid at every ``min_regime_obs`` in the grid.
+
+    The main run's labels throughout: only ``strategy.min_regime_obs`` moves,
+    so every difference between the three files is the effect of that
+    threshold and of nothing else. N = 24 is the configured value, so that
+    file reproduces ``timing_results.csv`` exactly and is the check that this
+    path and section 5's are the same code.
+
+    Beside the ``diff``, and because of the reviewer's answer to section 5 Q2
+    (``decisions/section_5_review.md``),
+    ``outputs/tables/robustness/minobs_fallback.csv`` carries the number and
+    share of out-of-sample months the timed book left at 1/5 and the mean
+    absolute deviation of its weights from 1/5, per N, source and eta. A
+    larger ``diff`` at N = 12 is read as more trading, not more signal, unless
+    the fallback share says otherwise — and these are the columns that say.
+    """
+    import dataclasses
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.data.french import load_french
+
+    log = logging.getLogger("regime")
+    factors = load_french(cfg.french_pull_id, cfg)
+    sources = load_label_sources(cfg)
+    tables = _Path(cfg.outputs_tables_dir)
+
+    fallback_rows = []
+    for N in cfg.strategy_min_regime_obs_grid:
+        vcfg = dataclasses.replace(cfg, strategy_min_regime_obs=N)
+        grid = variant_timing_grid(sources, factors, vcfg, str(tables / f"timing_results_minobs{N}.csv"))
+        log.info(
+            "step 6.4 min_regime_obs = %d headline-equivalent row:\n%s",
+            N, headline_row(grid, vcfg).to_frame().T.to_string(index=False),
+        )
+        for source in vcfg.strategy_label_sources:
+            for eta in vcfg.strategy_eta_grid:
+                n_months, n_fallback, share, deviation = fallback_summary(
+                    sources[source], factors, vcfg, eta
+                )
+                fallback_rows.append((N, source, eta, n_months, n_fallback, share, deviation))
+
+    fallback = pd.DataFrame(fallback_rows, columns=list(MINOBS_FALLBACK_COLUMNS))
+    fallback.to_csv(robustness_dir(cfg) / "minobs_fallback.csv", index=False)
+    log.info(
+        "minobs_fallback.csv written: %d rows\n%s",
+        len(fallback),
+        fallback.loc[
+            (fallback["source"] == cfg.strategy_headline_source)
+            & (fallback["eta"] == cfg.strategy_headline_eta)
+        ].to_string(index=False),
+    )
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -984,6 +1045,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     run_robustness_k(cfg)                                                                  # 6.1
     run_robustness_diag(cfg)                                                               # 6.2
     run_robustness_10feat(cfg)                                                             # 6.3
+    run_robustness_minobs(cfg)                                                             # 6.4
 
 
 section_7 = _not_built(7)
