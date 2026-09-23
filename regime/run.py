@@ -1108,6 +1108,70 @@ def run_robustness_blocksize(cfg: Config) -> None:
     )
 
 
+def nonprimary_feature_set(cfg: Config) -> str:
+    """The feature set ``features.primary`` does not name: ``"core_no_level"`` if it names ``"core"``."""
+    from regime.config import FEATURE_SETS
+
+    return next(name for name in FEATURE_SETS if name != cfg.features_primary)
+
+
+def run_robustness_nonprimary(cfg: Config) -> None:
+    """Step 6.6 — the conditional statistics, bootstrap and timing grid of the non-primary feature set.
+
+    The classifier itself is not refitted here. Section 3 runs **both** feature
+    sets on every run — that is what keeps
+    ``classifier_diagnostics.csv`` from going stale against the
+    ``features.primary`` key it justifies — and writes this one's
+    ``filtered_probs.csv`` and ``smoothed_probs.csv`` under
+    ``robustness/<folder>/`` with the state numbering chained exactly as the
+    main run's (convention 16). Step 6.6 reads those and adds the three things
+    section 3 does not do, because section 3 never touches a factor return.
+
+    Outputs under ``robustness/nolevel/`` (or ``robustness/level/``, if the
+    primary set were ever ``core_no_level``) and
+    ``outputs/tables/timing_results_<folder>.csv``.
+    """
+    from pathlib import Path as _Path
+
+    import pandas as pd
+
+    from regime.config import feature_set_columns
+    from regime.data.french import load_french
+    from regime.models.hmm import hard_labels
+
+    log = logging.getLogger("regime")
+    factors = load_french(cfg.french_pull_id, cfg)
+    name = nonprimary_feature_set(cfg)
+    folder = ROBUSTNESS_DIR_NAME[name]
+    vcfg = robustness_cfg(cfg, folder, strategy_label_sources=ROBUSTNESS_SOURCES)
+
+    def _probs(path: str) -> pd.DataFrame:
+        source = _Path(path)
+        if not source.exists():
+            raise FileNotFoundError(f"{source} is absent; section 3 writes it and must run first")
+        frame = pd.read_csv(source, parse_dates=["date"]).set_index("date")
+        frame.index = pd.DatetimeIndex(frame.index, name="date")
+        return frame
+
+    labels = {
+        "hmm_filtered": hard_labels(_probs(vcfg.outputs_filtered_probs), vcfg),
+        "hmm_smoothed": hard_labels(_probs(vcfg.outputs_smoothed_probs), vcfg),
+    }
+    log.info(
+        "step 6.6: %s (d = %d) from %s, %d filtered rows",
+        name, len(feature_set_columns(cfg, name)), vcfg.outputs_tables_dir,
+        len(labels["hmm_filtered"]),
+    )
+
+    n_excl = variant_conditional(labels, factors, vcfg)
+    grid = variant_timing_grid(
+        labels, factors, vcfg, str(_Path(cfg.outputs_tables_dir) / f"timing_results_{folder}.csv")
+    )
+    row = variant_summary_row(folder, grid, labels, factors, vcfg, n_excl)
+    log.info("step 6.6 headline-equivalent row:\n%s", pd.DataFrame([row]).to_string(index=False))
+    append_robustness_summary([row], cfg)
+
+
 def section_6(cfg: Config, pull: bool = False) -> None:
     """Section 6: robustness — steps 6.1 to 6.7.
 
@@ -1122,6 +1186,7 @@ def section_6(cfg: Config, pull: bool = False) -> None:
     run_robustness_10feat(cfg)                                                             # 6.3
     run_robustness_minobs(cfg)                                                             # 6.4
     run_robustness_blocksize(cfg)                                                          # 6.5
+    run_robustness_nonprimary(cfg)                                                         # 6.6
 
 
 section_7 = _not_built(7)

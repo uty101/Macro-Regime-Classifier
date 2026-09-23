@@ -18,11 +18,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from regime.config import Config, load_config
+from regime.config import Config, feature_set_columns, load_config, primary_columns
 from regime.features import model_input
 from regime.models.hmm import hard_labels, refit_dates
 from regime.run import (
     ROBUSTNESS_SOURCES,
+    nonprimary_feature_set,
     robustness_10feat_cfg,
     robustness_10feat_columns,
     robustness_cfg,
@@ -293,3 +294,25 @@ def test_blocksize_6_reproduces_headline_row() -> None:
                    "p_one_sided", "mean_turnover"):
         assert float(row[column]) == pytest.approx(float(headline[column]), abs=1e-12), column
     assert int(row["n_months"]) == int(headline["n_months"])
+
+
+# --------------------------------------------------------------- step 6.6
+
+
+def test_nonprimary_model_input_is_the_other_feature_set(tmp_path) -> None:
+    """Step 6.6: the rerun uses whichever set ``features.primary`` does not name, and never the main one."""
+    cfg = load_config()
+    other = nonprimary_feature_set(cfg)
+    assert other != cfg.features_primary
+    columns = feature_set_columns(cfg, other)
+    assert tuple(columns) != tuple(primary_columns(cfg))
+
+    vcfg = dataclasses.replace(
+        robustness_cfg(cfg, "probe"), outputs_dropped_rows=str(tmp_path / "dropped.csv")
+    )
+    z = _synthetic_z(cfg)
+    x = model_input(z, vcfg, columns=tuple(columns))
+    assert list(x.columns) == list(columns)
+    assert list(x.columns) != list(primary_columns(cfg))
+    # the non-primary set is the core eight minus dgs10_level, not a different eight
+    assert set(columns) < set(primary_columns(cfg)) or set(primary_columns(cfg)) < set(columns)
