@@ -7,7 +7,7 @@ it in that section's review file.
 
 ---
 
-## 1. K = 5 cannot complete the expanding protocol (step 6.1)
+## 1. K = 5 cannot complete the expanding protocol (step 6.1) — RESOLVED, Option A
 
 **Raised:** session 6, step 6.1.
 
@@ -61,3 +61,10 @@ collapsed state would be filtered rather than reported.
 **What session 6 did:** neither. K ∈ {2, 3, 4} are complete and reported; K = 5
 is recorded in `k_variant_outcomes.csv` and in `review/section_6.md`. Nothing
 else in section 6 depends on it.
+
+**Resolved (session 7, reviewer decision): Option A.** K = 5 is reported as a
+variant that cannot be filtered; `regime/models/hmm_numpy.py` is unchanged. The
+reason: 240 free parameters on 192 training rows collapses a state onto a
+7-dimensional hyperplane, and `forward_filter` refusing a singular covariance
+is correct behaviour. The failure is the finding. See
+`decisions/section_6_review.md`, Q1. This item is kept, not deleted.
