@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Callable
 
 from regime.config import Config, load_config
@@ -1418,6 +1420,90 @@ def section_7(cfg: Config, pull: bool = False) -> None:
     write_published_tables(cfg)                                                            # 7.2
 
 
+RUNTIME_COLUMNS = ("run_started", "section", "seconds")
+
+
+def append_runtime(run_started: str, section: int, seconds: float, cfg: Config) -> None:
+    """One row per section per run, appended to ``cfg.outputs_runtime_log``.
+
+    Appended, never rewritten, for the same reason ``data/raw/manifest.csv``
+    is: a run that was slow is evidence, and a file that only ever holds the
+    last run cannot show a section getting slower. ``run_started`` is one
+    timestamp for the whole run, so the rows of a run group without depending
+    on their order.
+
+    This file is the one output excluded from step 7.3's idempotence
+    comparison — by construction it differs between two runs, and it is the
+    only thing that may.
+    """
+    import pandas as pd
+
+    from pathlib import Path as _Path
+
+    path = _Path(cfg.outputs_runtime_log)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = pd.DataFrame([[run_started, section, round(float(seconds), 3)]], columns=list(RUNTIME_COLUMNS))
+    row.to_csv(path, mode="a", header=not path.exists(), index=False)
+
+
+COMPARISON_COLUMNS = ("path", "compared_as", "sha_run1", "sha_run2", "identical")
+
+
+def compare_output_trees(run1_dir, run2_dir, cfg: Config):
+    """Step 7.3's idempotence table: every file under ``outputs/`` from two runs, compared.
+
+    CSV files are compared by the sha256 of their **bytes**; PNG files by
+    equality of the decoded pixel array, because a PNG carries a creation
+    time in its chunks that no ``metadata`` argument suppresses on every
+    matplotlib version, and what has to be reproducible is the picture.
+
+    ``outputs/tables/runtime.csv`` is excluded: it is appended once per
+    section per run and differs by construction. Nothing else is excluded.
+
+    Byte equality here is a **same-machine** property. Floating-point output
+    moves at the 1e-12 level across Python, BLAS and library versions, so this
+    table says two runs of one interpreter on one machine agree; it does not
+    say a different machine would produce the same bytes.
+    """
+    import hashlib
+    from pathlib import Path as _Path
+
+    import numpy as np
+    import pandas as pd
+
+    run1, run2 = _Path(run1_dir), _Path(run2_dir)
+    excluded = _Path(cfg.outputs_runtime_log).name
+
+    def sha(path: _Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    paths = sorted(
+        {p.relative_to(run1).as_posix() for p in run1.rglob("*") if p.is_file()}
+        | {p.relative_to(run2).as_posix() for p in run2.rglob("*") if p.is_file()}
+    )
+    rows = []
+    for rel in paths:
+        if _Path(rel).name == excluded:
+            continue
+        a, b = run1 / rel, run2 / rel
+        if not (a.exists() and b.exists()):
+            rows.append({"path": rel, "compared_as": "missing", "sha_run1": sha(a) if a.exists() else "",
+                         "sha_run2": sha(b) if b.exists() else "", "identical": False})
+            continue
+        sha_a, sha_b = sha(a), sha(b)
+        if rel.endswith(".png"):
+            import matplotlib.image as mpimg
+
+            identical = bool(np.array_equal(mpimg.imread(a), mpimg.imread(b)))
+            compared_as = "pixels"
+        else:
+            identical = sha_a == sha_b
+            compared_as = "bytes"
+        rows.append({"path": rel, "compared_as": compared_as, "sha_run1": sha_a,
+                     "sha_run2": sha_b, "identical": identical})
+    return pd.DataFrame(rows, columns=list(COMPARISON_COLUMNS))
+
+
 SECTIONS: dict[int, Callable[[Config, bool], None]] = {
     1: section_1,
     2: section_2,
@@ -1436,10 +1522,20 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    log = logging.getLogger("regime")
     cfg = load_config()
     sections = [args.section] if args.section is not None else sorted(SECTIONS)
+    run_started = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for n in sections:
+        started = time.perf_counter()
         SECTIONS[n](cfg, pull=args.pull if n == 1 else False)
+        seconds = time.perf_counter() - started
+        append_runtime(run_started, n, seconds, cfg)
+        threshold = (
+            cfg.run_long_step_timeout_minutes if str(n) in {s.split(".")[0] for s in cfg.run_long_steps}
+            else cfg.run_step_timeout_minutes
+        )
+        log.info("section %d: %.1f s (threshold %d min)", n, seconds, threshold)
 
 
 if __name__ == "__main__":
