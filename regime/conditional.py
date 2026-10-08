@@ -508,14 +508,14 @@ def bootstrap_refit_split(
 
     Reviewer answer to section 4 Q2 (``decisions/section_4_review.md``): the
     split of the out-of-sample dates by whether the filtered label run
-    containing them began on a refit date is large enough — RMW state 0 splits
-    3.228 against 0.263 — that reporting it without intervals says only that it
+    containing them began on a refit date is large enough, RMW state 0 splits
+    3.228 against 0.263, that reporting it without intervals says only that it
     is large.
 
     Both halves travel in the *same* bootstrap row: the flag is a column of the
     resampled array beside the label and the six returns. So each replication's
     difference is a like-for-like comparison on one resampled history, never a
-    difference between two independently resampled marginals — the same
+    difference between two independently resampled marginals, the same
     construction as the pairwise state differences and the filtered/smoothed
     gap. ``StationaryBootstrap`` settings and the seed are step 4.3's.
 

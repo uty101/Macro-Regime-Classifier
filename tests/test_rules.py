@@ -1,8 +1,8 @@
 """Step 3.1: the quadrant labels and the first-window median rule.
 
 Both tests build their own raw frame and compute the medians independently of
-``regime.models.rules`` — by hand in the first, with ``np.median`` on explicit
-slices in the second — so a change to the expanding rule cannot pass by
+``regime.models.rules``, by hand in the first, with ``np.median`` on explicit
+slices in the second, so a change to the expanding rule cannot pass by
 agreeing with itself.
 """
 

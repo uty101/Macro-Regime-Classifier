@@ -1,4 +1,4 @@
-"""Section 5 — the trailing conditional Sharpe, the weights, the backtest, the grid and the timing-gain bootstrap."""
+"""Section 5, the trailing conditional Sharpe, the weights, the backtest, the grid and the timing-gain bootstrap."""
 
 from __future__ import annotations
 

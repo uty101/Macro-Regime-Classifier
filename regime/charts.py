@@ -123,7 +123,7 @@ def regimes_timeline(
     Top panel: ``dgs10_level`` and ``cpi_3m_ann`` on twin axes, background
     shaded by the **filtered** hard label. Bottom panel: the identical series
     shaded by the **smoothed** label. The two panels are the picture of
-    question 4 — one history labelled with and without hindsight — and the
+    question 4, one history labelled with and without hindsight, and the
     visible difference between them is what ``filtered_smoothed_gap.csv``
     measures.
 
@@ -196,7 +196,7 @@ def conditional_sharpe_heatmap(stats: pd.DataFrame, path: str, cfg: Config):
                 )
             )
     fig.colorbar(image, ax=ax, shrink=0.8, label="annualised Sharpe")
-    ax.set_title("conditional Sharpe by regime — black border: interval excludes 0", fontsize=10, loc="left")
+    ax.set_title("conditional Sharpe by regime, black border: interval excludes 0", fontsize=10, loc="left")
     fig.tight_layout()
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -210,7 +210,7 @@ def timed_vs_static(backtests: dict[str, pd.DataFrame], path: str, cfg: Config) 
 
     The headline cell's (eta, lag, cost) and nothing else. A log axis because
     three cumulative wealth curves that stay within a few per cent of each
-    other for twenty years are unreadable on a linear one — and that they do
+    other for twenty years are unreadable on a linear one, and that they do
     is the point of the chart.
     """
     fig, ax = plt.subplots(figsize=(11, 5.5))
@@ -224,7 +224,7 @@ def timed_vs_static(backtests: dict[str, pd.DataFrame], path: str, cfg: Config) 
     ax.legend(fontsize=9, frameon=False)
     ax.set_ylabel("cumulative net return (log scale)", fontsize=9)
     ax.set_title(
-        f"timed vs static — eta {cfg.strategy_headline_eta}, lag {cfg.strategy_headline_lag}, "
+        f"timed vs static, eta {cfg.strategy_headline_eta}, lag {cfg.strategy_headline_lag}, "
         f"{cfg.strategy_headline_cost_bp} bp",
         fontsize=10, loc="left",
     )

@@ -138,8 +138,7 @@ def robustness_cfg(cfg: Config, folder: str, **overrides) -> Config:
     """``cfg`` with every output path redirected under ``robustness/<folder>/``, plus ``overrides``.
 
     Every section 6 variant is driven through here. Nothing in the main
-    outputs is touched, and a variant is always a ``dataclasses.replace`` —
-    never an edit to ``config.toml`` (section 6's rule, applied early because
+    outputs is touched, and a variant is always a ``dataclasses.replace``, never an edit to ``config.toml`` (section 6's rule, applied early because
     section 3 already runs two feature sets).
 
     The overrides are applied last, so a variant may replace a redirected path
@@ -202,7 +201,7 @@ def _run_feature_set(z, columns, K: int, cfg: Config) -> dict:
 
 
 def section_3(cfg: Config, pull: bool = False) -> None:
-    """Section 3: the four label sources, from features_z.parquet — steps 3.1 to 3.7.
+    """Section 3: the four label sources, from features_z.parquet, steps 3.1 to 3.7.
 
     Nothing here reads raw data or recomputes z (convention 3), and nothing
     here reads a factor return. Both feature sets are run every time: the
@@ -235,7 +234,7 @@ def section_3(cfg: Config, pull: bool = False) -> None:
     other = next(name for name in FEATURE_SETS if name != primary)
     window_end = pd.Timestamp(cfg.sample_first_window_end)
 
-    # 3.3 — K is selected once, on the d = 8 core set, and used for both. The
+    # 3.3: K is selected once, on the d = 8 core set, and used for both. The
     # other set's BIC table is written for information only; K is not
     # reselected, so a feature-set change cannot silently change K too.
     core_input = _model_input_for(z, cfg, "core")
@@ -330,8 +329,7 @@ def project1_conditional(cfg: Config, labels: pd.DataFrame):
     logs ``project1: absent, conditional join skipped`` and writes no file.
 
     When it is present the long (date, factor, ret) frame is pivoted wide,
-    ``cfg`` is replaced so ``strategy_factors`` is the project 1 factor tuple,
-    and the same ``bootstrap_conditional`` runs against the HMM filtered
+    ``cfg`` is replaced so ``strategy_factors`` is the project 1 factor tuple, and the same ``bootstrap_conditional`` runs against the HMM filtered
     labels on the dates the two have in common.
     """
     import dataclasses
@@ -363,7 +361,7 @@ def project1_conditional(cfg: Config, labels: pd.DataFrame):
 
 
 def section_4(cfg: Config, pull: bool = False) -> None:
-    """Section 4: conditional factor statistics by regime — steps 4.1 to 4.5.
+    """Section 4: conditional factor statistics by regime, steps 4.1 to 4.5.
 
     The first step of the section that reads a factor return. Every statistic
     is a function of ``join_next_return``'s frame, so the timing convention is
@@ -460,7 +458,7 @@ def section_4(cfg: Config, pull: bool = False) -> None:
 
 
 def section_5(cfg: Config, pull: bool = False) -> None:
-    """Section 5: the timed strategy — steps 5.1 to 5.5.
+    """Section 5: the timed strategy, steps 5.1 to 5.5.
 
     The four label frames are loaded here and passed to ``regime.strategy`` as
     plain ``labels`` arguments. The strategy module never loads a label source
@@ -468,8 +466,8 @@ def section_5(cfg: Config, pull: bool = False) -> None:
     labelling can sit in the comparison rows of the grid without ever reaching
     the code that decides a weight at t.
 
-    The headline cell — ``strategy.headline_eta``, ``headline_lag``,
-    ``headline_cost_bp``, ``headline_source`` — was fixed in ``config.toml``
+    The headline cell, ``strategy.headline_eta``, ``headline_lag``,
+    ``headline_cost_bp``, ``headline_source``, was fixed in ``config.toml``
     before any of this ran. The other 71 rows are a grid and are logged as one.
     """
     from pathlib import Path as _Path
@@ -527,8 +525,8 @@ DECOMPOSITION_COLUMNS = ("label", "eta", "lag", "cost_bp", "source", "sharpe_sta
 def headline_decomposition(label_frames: dict, factors, cfg: Config):
     """The headline cell beside the same cell at lag 0 and at 0 bp, so the two costs separate.
 
-    The grid has no zero-cost column — ``strategy.cost_bp_grid`` starts at 10 bp
-    — so the cost of trading cannot be read off it. These four rows hold the
+    The grid has no zero-cost column, ``strategy.cost_bp_grid`` starts at 10 bp
+  , so the cost of trading cannot be read off it. These four rows hold the
     source and eta of the headline cell fixed and vary only the lag and the
     cost: lag 1 / 20 bp is the headline, lag 0 / 0 bp is the gross timing
     signal, and the two mixed rows say how much of the gap between them is the
@@ -606,7 +604,7 @@ def is_singular_covariance(error: BaseException) -> bool:
 
 
 def robustness_dir(cfg: Config):
-    """``outputs/tables/robustness/`` — the shared parent of every variant folder."""
+    """``outputs/tables/robustness/``, the shared parent of every variant folder."""
     from pathlib import Path as _Path
 
     path = _Path(cfg.outputs_tables_dir) / "robustness"
@@ -650,7 +648,7 @@ def variant_conditional(labels: dict, factors, vcfg: Config) -> int:
     ``conditional_differences_<source>.csv`` under the variant's tables folder,
     on exactly the dates that variant's own out-of-sample window covers.
     Returns the count of pairwise state differences excluding zero for the
-    headline source — the classifier-behaviour number that travels with the
+    headline source, the classifier-behaviour number that travels with the
     variant's timing number.
     """
     from pathlib import Path as _Path
@@ -701,8 +699,8 @@ def headline_row(grid, cfg: Config):
 def fallback_summary(labels, factors, cfg: Config, eta: float | None = None) -> tuple[int, int, float, float]:
     """``(n_months, n_fallback, fallback_share, mean_abs_deviation)`` for one weight book.
 
-    The denominator is the variant's own out-of-sample decision dates — the
-    index ``weights`` builds — not the earning months of a backtest, because a
+    The denominator is the variant's own out-of-sample decision dates, the
+    index ``weights`` builds, not the earning months of a backtest, because a
     fallback is a property of the decision, not of the month it earns.
     ``mean_abs_deviation`` is over every weight of every month, the fallback
     rows included, so it is directly comparable with ``weight_deviation.csv``.
@@ -798,7 +796,7 @@ def append_robustness_summary(rows: list, cfg: Config) -> None:
 
 
 def run_robustness_k(cfg: Config) -> None:
-    """Step 6.1 — the whole protocol rerun at every K in ``cfg.hmm_k_grid``.
+    """Step 6.1, the whole protocol rerun at every K in ``cfg.hmm_k_grid``.
 
     For each K: the expanding and smoothed HMM fits (anchoring, restart
     tables, state counts, the chain table) under ``robustness/k<K>/``, the
@@ -849,7 +847,7 @@ def run_robustness_k(cfg: Config) -> None:
                 }
             )
             log.error(
-                "step 6.1: K = %d could not complete the expanding protocol — %s "
+                "step 6.1: K = %d could not complete the expanding protocol, %s "
                 "(%d free parameters at d = %d). Recorded in k_variant_outcomes.csv "
                 "and decisions/OPEN.md; every other K continues.",
                 K, error, n_params(K, len(columns)), len(columns),
@@ -887,14 +885,14 @@ def primary_k(cfg: Config) -> int:
 
 
 def run_robustness_diag(cfg: Config) -> None:
-    """Step 6.2 — the whole protocol at ``primary_K`` with ``covariance_type="diag"``.
+    """Step 6.2, the whole protocol at ``primary_K`` with ``covariance_type="diag"``.
 
     ``dataclasses.replace(cfg, hmm_covariance_type="diag")`` and nothing else.
     ``HMMParams.covars`` stays (K, d, d): hmmlearn's ``covars_`` property
     returns full-shaped matrices for every covariance type, so
     ``forward_filter`` and the anchoring are unchanged and this variant
     differs from the main run only in what the fit was allowed to estimate.
-    BIC is not recomputed — K is ``primary_K``, chosen once on the full
+    BIC is not recomputed, K is ``primary_K``, chosen once on the full
     covariance fit, and a diagonal model is not being offered the chance to
     change it.
 
@@ -949,17 +947,17 @@ def robustness_10feat_cfg(cfg: Config) -> Config:
 
 
 def robustness_10feat_columns(cfg: Config) -> tuple:
-    """``features.core`` + ``features.robustness`` — the ten model-input columns of step 6.3."""
+    """``features.core`` + ``features.robustness``, the ten model-input columns of step 6.3."""
     return tuple(cfg.features_core) + tuple(cfg.features_robustness)
 
 
 def run_robustness_10feat(cfg: Config) -> None:
-    """Step 6.3 — the 10-feature run: `core` + `robustness`, from 2004-01-31, first refit 2009-12-31.
+    """Step 6.3, the 10-feature run: `core` + `robustness`, from 2004-01-31, first refit 2009-12-31.
 
     The z matrix is **not** recomputed. The standardised ``unrate_chg12`` and
     ``breakeven_chg12`` columns are already in ``features_z.parquet`` and their
-    standardisation is unchanged — the step 2.3 rule over their own non-NaN
-    rows — so this run reads them exactly as the main run reads the core
+    standardisation is unchanged, the step 2.3 rule over their own non-NaN
+    rows, so this run reads them exactly as the main run reads the core
     eight (convention 3).
 
     The out-of-sample window for this variant starts at its own first refit,
@@ -1011,7 +1009,7 @@ MINOBS_FALLBACK_COLUMNS = (
 
 
 def run_robustness_minobs(cfg: Config) -> None:
-    """Step 6.4 — the full 72-row grid at every ``min_regime_obs`` in the grid.
+    """Step 6.4, the full 72-row grid at every ``min_regime_obs`` in the grid.
 
     The main run's labels throughout: only ``strategy.min_regime_obs`` moves,
     so every difference between the three files is the effect of that
@@ -1025,7 +1023,7 @@ def run_robustness_minobs(cfg: Config) -> None:
     share of out-of-sample months the timed book left at 1/5 and the mean
     absolute deviation of its weights from 1/5, per N, source and eta. A
     larger ``diff`` at N = 12 is read as more trading, not more signal, unless
-    the fallback share says otherwise — and these are the columns that say.
+    the fallback share says otherwise, and these are the columns that say.
     """
     import dataclasses
     from pathlib import Path as _Path
@@ -1067,7 +1065,7 @@ def run_robustness_minobs(cfg: Config) -> None:
 
 
 def run_robustness_blocksize(cfg: Config) -> None:
-    """Step 6.5 — ``bootstrap.block_size`` over {3, 6, 12}, for the headline cell only.
+    """Step 6.5, ``bootstrap.block_size`` over {3, 6, 12}, for the headline cell only.
 
     Only the resampling changes. The weight book, the static comparator and
     both net-return series are built once, outside the sweep, because none of
@@ -1149,12 +1147,12 @@ def nonprimary_feature_set(cfg: Config) -> str:
 
 
 def run_robustness_nonprimary(cfg: Config) -> None:
-    """Step 6.6 — the conditional statistics, bootstrap and timing grid of the non-primary feature set.
+    """Step 6.6, the conditional statistics, bootstrap and timing grid of the non-primary feature set.
 
     The classifier itself is not refitted here. Section 3 runs **both** feature
-    sets on every run — that is what keeps
+    sets on every run, that is what keeps
     ``classifier_diagnostics.csv`` from going stale against the
-    ``features.primary`` key it justifies — and writes this one's
+    ``features.primary`` key it justifies, and writes this one's
     ``filtered_probs.csv`` and ``smoothed_probs.csv`` under
     ``robustness/<folder>/`` with the state numbering chained exactly as the
     main run's (convention 16). Step 6.6 reads those and adds the three things
@@ -1208,9 +1206,9 @@ def run_robustness_nonprimary(cfg: Config) -> None:
 def headline_net_returns(cfg: Config, sources: dict, factors):
     """The headline cell's ``(timed, static)`` net-return series, on one index of earning months.
 
-    Exactly the cell ``config.toml`` fixed before section 5 ran — eta
+    Exactly the cell ``config.toml`` fixed before section 5 ran, eta
     ``headline_eta``, lag ``headline_lag``, ``headline_cost_bp`` basis points,
-    source ``headline_source`` — rebuilt from the same three functions the
+    source ``headline_source``, rebuilt from the same three functions the
     grid used, so step 6.7's statistics sit on the series the grid's ``diff``
     came from and not on a second construction of them.
     """
@@ -1246,7 +1244,7 @@ def excluding_zero_pairs(cfg: Config) -> list:
 
 
 def run_robustness_fragility(cfg: Config) -> None:
-    """Step 6.7 — how much of each headline statistic one month is carrying.
+    """Step 6.7, how much of each headline statistic one month is carrying.
 
     Two statistics, two treatments each. The headline timing ``diff`` and the
     one section 4 pairwise state difference whose interval excludes zero are
@@ -1255,7 +1253,7 @@ def run_robustness_fragility(cfg: Config) -> None:
 
     Neither is a result and neither replaces the statistic it is about. What
     they establish is the size of the statistic relative to the influence of
-    one month — the question section 5 raised when the headline ``diff``
+    one month, the question section 5 raised when the headline ``diff``
     changed sign on the removal of 2026-07-31, and section 4 raised when its
     one interval excluding zero turned out to lean on 2009-03.
 
@@ -1324,7 +1322,7 @@ def run_robustness_fragility(cfg: Config) -> None:
 
 
 def _pair_full_value(labels, factors, factor: str, state_a: int, state_b: int, cfg: Config) -> float:
-    """``sharpe(state_b) − sharpe(state_a)`` over every month of the pair, no month dropped."""
+    """``sharpe(state_b) - sharpe(state_a)`` over every month of the pair, no month dropped."""
     from regime.robustness import _pair_difference, pairwise_months
 
     months = pairwise_months(labels, factors, factor, state_a, state_b, cfg)
@@ -1335,7 +1333,7 @@ def _pair_full_value(labels, factors, factor: str, state_a: int, state_b: int, c
 
 
 def section_6(cfg: Config, pull: bool = False) -> None:
-    """Section 6: robustness — steps 6.1 to 6.7.
+    """Section 6: robustness, steps 6.1 to 6.7.
 
     Every run here is reported *against* the headline cell of the main run and
     none of them replaces it. The headline cell was fixed in ``config.toml``
@@ -1440,7 +1438,7 @@ def write_published_tables(cfg: Config):
 
 
 def section_7(cfg: Config, pull: bool = False) -> None:
-    """Section 7: outputs and write-up — steps 7.1 to 7.3.
+    """Section 7: outputs and write-up, steps 7.1 to 7.3.
 
     Step 7.4 is the README and is not code, so it is not run from here. This
     section regenerates every chart and every table of the kickoff's section 8
@@ -1464,7 +1462,7 @@ def append_runtime(run_started: str, section: int, seconds: float, cfg: Config) 
     on their order.
 
     This file is the one output excluded from step 7.3's idempotence
-    comparison — by construction it differs between two runs, and it is the
+    comparison, by construction it differs between two runs, and it is the
     only thing that may.
     """
     import pandas as pd

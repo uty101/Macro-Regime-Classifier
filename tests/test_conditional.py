@@ -1,4 +1,4 @@
-"""Section 4 — the join to t+1, conditional statistics, the block bootstrap and the gap."""
+"""Section 4, the join to t+1, conditional statistics, the block bootstrap and the gap."""
 
 from __future__ import annotations
 

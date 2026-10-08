@@ -1,4 +1,4 @@
-# Decision — the reviewer's answers to the section 3 questions
+# Decision: the reviewer's answers to the section 3 questions
 
 The four questions are those in `instructions/03b_section_3_revision.status.md`,
 "Questions and blockers for the reviewer". The reviewer answered them in the
@@ -7,7 +7,7 @@ records the answers so nothing in section 4 onward has to go back to chat for
 them. None of these answers changes a convention, a config value or an output
 already produced.
 
-## Q1 — 9 of 20 filtered label changes land on a refit date (45%)
+## Q1: 9 of 20 filtered label changes land on a refit date (45%)
 
 **Accepted as a finding, not an artefact to engineer away.**
 
@@ -24,7 +24,7 @@ out-of-sample dates are split by whether the filtered run containing them began
 on a refit date, and the conditional statistics are reported for each half. No
 further pass over section 3 is made.
 
-## Q2 — `detects_2008` is false for both feature sets
+## Q2: `detects_2008` is false for both feature sets
 
 **The criterion was the reviewer's error, not a fault in the classifier.**
 
@@ -40,7 +40,7 @@ make, because it was already in the right state and had been since 2007-09.
 with this note. It is not redefined after the fact, and the pre-registered rule
 that consumed it is not re-run.
 
-## Q3 — should the d = 7 diagnostics the rule does not weigh count?
+## Q3: should the d = 7 diagnostics the rule does not weigh count?
 
 **No. The primary feature set stays `"core"` (d = 8).**
 
@@ -52,7 +52,7 @@ known. That is the whole point of pre-registering it (convention 15).
 d = 7 remains the step 6.6 rerun. `decisions/primary_feature_set.md` stands as
 written.
 
-## Q4 — the three deviations from the letter of the specification
+## Q4: the three deviations from the letter of the specification
 
 **All three accepted.** The three extra tests, the `chain_to` parameter on
 `run_smoothed_hmm` and `run_expanding_gmm`, and `median_run_months` being

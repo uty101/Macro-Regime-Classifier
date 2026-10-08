@@ -2,8 +2,8 @@
 
 The log-likelihood is a pure forward-pass quantity, so ``model.score`` and
 ``forward_filter`` must agree exactly. ``predict_proba`` is smoothed, so only
-its final row — where the smoother has no future left to condition on and
-collapses onto the filter — is compared (convention 6). No other row of
+its final row, where the smoother has no future left to condition on and
+collapses onto the filter, is compared (convention 6). No other row of
 ``predict_proba`` is compared to, or used as, a filtered probability anywhere
 in this repo.
 """

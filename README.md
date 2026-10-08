@@ -1,25 +1,31 @@
 # Macro Regime Classifier and Factor Timing
 
+[![CI](https://github.com/uty101/Macro-Regime-Classifier/actions/workflows/ci.yml/badge.svg)](https://github.com/uty101/Macro-Regime-Classifier/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-132%20passing-brightgreen)](https://github.com/uty101/Macro-Regime-Classifier/actions/workflows/ci.yml)
+[![python](https://img.shields.io/badge/python-3.11-blue)](pyproject.toml)
+[![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+
 **The result is a null, and it is the point of the project.** The filtered
-classifier's labels move at refits as often as not — 9 of its 20 label changes
+classifier's labels move at refits as often as not: 9 of its 20 label changes
 land exactly on a refit date, 45% against a 1-in-12 base rate
 (`outputs/tables/classifier_diagnostics.csv`, `core` row). It separates factor
 premia no better than chance: 1 of 18 pairwise state differences has a
 bootstrap interval excluding zero
 (`outputs/tables/conditional_differences_hmm_filtered.csv`), where a 90%
-interval on 18 independent draws would give about 2. And no cell of the
-72-row timing grid is distinguishable from zero in the direction of a gain —
-0 of 72 cells reach `p_one_sided` below 0.10, the smallest being 0.178
+interval on 18 independent draws would give about 2. And no cell of the 72-row
+timing grid is distinguishable from zero in the direction of a gain: 0 of 72
+cells reach `p_one_sided` below 0.10, the smallest being 0.178
 (`outputs/tables/timing_results.csv`). The headline cell, fixed in
-`config.toml` before any of it was computed, is a Sharpe difference of
-**−0.027 with a 90% interval of [−0.228, 0.171]** and `p_one_sided` 0.5865:
+`config.toml` before any of it was computed, is a Sharpe difference of **-0.027
+with a 90% interval of [-0.228, 0.171]** and `p_one_sided` 0.5865:
 indistinguishable from zero in both directions, not a negative result.
 
 A reader who stops here has the finding. Everything below is the evidence.
 
-Data from FRED (Federal Reserve Bank of St. Louis), redistributed unmodified under its terms.
-Vintage data from ALFRED (Federal Reserve Bank of St. Louis), redistributed unmodified under its terms.
-Factor returns from the Kenneth R. French Data Library, redistributed unmodified under its terms.
+Data from FRED (Federal Reserve Bank of St. Louis), redistributed unmodified
+under its terms. Vintage data from ALFRED (Federal Reserve Bank of St. Louis),
+redistributed unmodified under its terms. Factor returns from the Kenneth R.
+French Data Library, redistributed unmodified under its terms.
 
 ---
 
@@ -27,7 +33,7 @@ Factor returns from the Kenneth R. French Data Library, redistributed unmodified
 
 A monthly macro regime classifier built from US rates, inflation, growth, the
 dollar, oil and equity volatility, estimated so that the regime at month-end t
-uses only data published by month-end t — ALFRED vintages for the revised
+uses only data published by month-end t: ALFRED vintages for the revised
 series, a 10-day lookback for the market series.
 
 Regimes come from an expanding-window Gaussian HMM (primary), a Gaussian
@@ -77,7 +83,7 @@ over K = 4.
 
 **They are not stable.** The largest absolute drift of any anchored state mean
 between consecutive refits is **1.88 z**: state 2's `indpro_chg12` mean moves
-from −2.329 at the 2013-12-31 refit to −0.451 at the 2014-12-31 refit. Both
+from -2.329 at the 2013-12-31 refit to -0.451 at the 2014-12-31 refit. Both
 rows are in `outputs/tables/param_drift.csv`:
 
 ```
@@ -157,12 +163,12 @@ Mkt-RF 258  0.102112 0.152959  0.667575    0.258644    1.096812
    UMD 258  0.017721 0.153339  0.115567   -0.244422    0.574285
 ```
 
-Beside them sits the refit split. `outputs/tables/conditional_stats_refit_split.csv`
-splits the out-of-sample dates by whether the filtered run containing them
-began on a refit date, and
+Beside them sits the refit split.
+`outputs/tables/conditional_stats_refit_split.csv` splits the out-of-sample
+dates by whether the filtered run containing them began on a refit date, and
 `outputs/tables/conditional_refit_split_differences.csv` bootstraps the
-difference between the two halves in one draw. **Six of 18 exclude zero** —
-six times as many as the pairwise state differences do:
+difference between the two halves in one draw. **Six of 18 exclude zero**, six
+times as many as the pairwise state differences do:
 
 ```
 factor  state  sharpe_diff  diff_p05  diff_p95  excludes_zero  n_false  n_true
@@ -182,8 +188,8 @@ should not be over-read: several of these cells rest on 12 to 23 months.
 
 ### 3. Does timing beat static equal weight out of sample, after lag and costs?
 
-**No, and it does not lose either.** The headline cell — η 0.5, lag 1, 20 bp,
-`hmm_filtered`, fixed in `config.toml` before section 5 ran — from
+**No, and it does not lose either.** The headline cell (η 0.5, lag 1, 20 bp,
+`hmm_filtered`, fixed in `config.toml` before section 5 ran), from
 `outputs/tables/timing_results.csv`:
 
 ```
@@ -201,8 +207,8 @@ The same cell at 10 bp, and both at lag 0 (same table):
  0.5    1       20 hmm_filtered       0.206378      0.179378 -0.027000 -0.227855  0.170963       0.5865       0.043992       257
 ```
 
-Halving the cost moves the headline `diff` from −0.027 to −0.016; removing the
-lag moves it to −0.004. Both stay inside an interval two-thirds of a Sharpe
+Halving the cost moves the headline `diff` from -0.027 to -0.016; removing the
+lag moves it to -0.004. Both stay inside an interval two-thirds of a Sharpe
 point wide. The gross signal is in
 `outputs/tables/timing_headline_decomposition.csv`, which holds the source and
 η fixed and varies only the lag and the cost, because the grid has no
@@ -217,9 +223,9 @@ headline lag, no cost  0.5    1        0 hmm_filtered       0.206378      0.2017
 ```
 
 Before lag and costs the timing signal is worth +0.018499 Sharpe. Applying the
-lag alone takes it to −0.004675; applying the cost alone takes it to −0.003580;
-applying both gives the headline −0.027000. Neither the lag nor the cost is the
-whole story — each on its own is enough to remove the gross signal. This is the
+lag alone takes it to -0.004675; applying the cost alone takes it to -0.003580;
+applying both gives the headline -0.027000. Neither the lag nor the cost is the
+whole story: each on its own is enough to remove the gross signal. This is the
 outcome the project's own outline predicted in advance: "timing adds 0.1 to 0.2
 Sharpe before costs and roughly zero after". It did not reach 0.1 before costs.
 
@@ -241,19 +247,19 @@ filtered ones are negative (`outputs/tables/timing_results.csv`):
  0.5    1       20 hmm_smoothed       0.206378      0.251173 0.044795 -0.154583  0.243486       0.3625       0.036095       257
 ```
 
-*And it is not enough.* The headline-equivalent smoothed cell is +0.045 with
-an interval of [−0.155, 0.243] and `p_one_sided` 0.3625. The best cell in the
+*And it is not enough.* The headline-equivalent smoothed cell is +0.045 with an
+interval of [-0.155, 0.243] and `p_one_sided` 0.3625. The best cell in the
 entire 72-row grid is the smoothed +0.073 at lag 0 and 10 bp, and its
-`p_one_sided` is 0.2490. **A labelling that is allowed to see the whole
-sample, traded with no lag and at half the headline cost, still cannot clear
-zero.** Since the smoothed labelling is not investable at all — it uses the
-future — this is a ceiling, not a strategy.
+`p_one_sided` is 0.2490. **A labelling that is allowed to see the whole sample,
+traded with no lag and at half the headline cost, still cannot clear zero.**
+Since the smoothed labelling is not investable at all (it uses the future),
+this is a ceiling, not a strategy.
 
 The cell-level gap tells the same story from the other side.
 `outputs/tables/filtered_smoothed_gap.csv` reports smoothed minus filtered per
 factor and state, bootstrapped in one draw so each replication compares the
 two labellings on one resampled history. The **mean gap over its 18 cells is
-−0.034**, and only one cell excludes zero:
+-0.034**, and only one cell excludes zero:
 
 ```
 factor  state       gap   gap_p05   gap_p95
@@ -271,12 +277,45 @@ Filtered and smoothed labels agree on 68.2% of dates
 
 ## The charts
 
-| file | what it shows |
-|---|---|
-| `outputs/charts/regimes_timeline.png` | `dgs10_level` and `cpi_3m_ann`, 1991-01-31 to 2026-07-31, shaded by filtered label (top) and by smoothed label (bottom). The difference between the panels is question 4. |
-| `outputs/charts/conditional_sharpe_filtered.png` | factor × state conditional Sharpe under filtered labels, each cell `SR / n`, black border where the interval excludes zero (4 of 18 cells). |
-| `outputs/charts/conditional_sharpe_smoothed.png` | the same under smoothed labels. |
-| `outputs/charts/timed_vs_static.png` | cumulative net return of static, timed-filtered and timed-smoothed at the headline η, lag and cost, on one log axis. |
+Every chart below is regenerated by `python -m regime.run` and committed under
+`outputs/charts/`.
+
+### Regimes through time
+
+![Filtered and smoothed regime labels, 1991 to 2026](outputs/charts/regimes_timeline.png)
+
+`dgs10_level` and `cpi_3m_ann` from 1991-01-31 to 2026-07-31, shaded by
+filtered label on top and by smoothed label underneath. The top panel is what
+was knowable at the time; the bottom panel is the same model allowed to see the
+whole sample. The white stretch to 2004 is the first estimation window, before
+any out-of-sample label exists. **The difference between the two panels is
+question 4**: hindsight gives long clean blocks, real time gives a stutter,
+including one-month flips that reverse immediately.
+
+### Conditional Sharpe by factor and state
+
+![Conditional Sharpe under filtered labels](outputs/charts/conditional_sharpe_filtered.png)
+
+Factor by state conditional Sharpe under the filtered labels, each cell
+annotated `SR / n`, with a black border where the bootstrap interval excludes
+zero (4 of 18 cells). Two of the four are `Mkt-RF`, whose conditional Sharpe
+sits on top of an unconditional 0.668, so the regime adds nothing there.
+
+![Conditional Sharpe under smoothed labels](outputs/charts/conditional_sharpe_smoothed.png)
+
+The same chart under smoothed labels. More cells clear zero once the labelling
+is allowed to look ahead, which is the mechanism question 4 is about.
+
+### Timed against static
+
+![Cumulative net return of the static and timed books](outputs/charts/timed_vs_static.png)
+
+Cumulative net return of static, timed-filtered and timed-smoothed at the
+headline combination of eta, lag and cost, on one log axis. Both timed lines
+sit above static for most of the run, and almost all of that gap opens in 2020
+and 2022; the red line is the hindsight version, which is not investable. Over
+257 months the Sharpe difference is -0.027 with a 90% interval of
+[-0.228, 0.171].
 
 `outputs/charts/features_review.png` (step 2.4) is the ten raw feature series
 and is a data check rather than a result.
@@ -299,7 +338,7 @@ The grid is 3 η × 2 lags × 3 costs × 4 label sources = 72 rows in
 | cells with `p_one_sided` < 0.10 | 0 of 72 (smallest 0.178) |
 | cells with `p_one_sided` < 0.05 | 0 of 72 |
 | cells whose `[diff_p05, diff_p95]` excludes 0 | 7 of 72 |
-| `diff` range | −0.381 to +0.073 |
+| `diff` range | -0.381 to +0.073 |
 
 All seven intervals that exclude zero are `rules`-baseline cells at η ≥ 0.25
 and 20 to 50 bp, and all seven exclude zero **below**: the rules quadrant
@@ -326,9 +365,9 @@ No variant produces a positive `diff` and none reaches `p_one_sided` below
 0.5125. The `k3` row reproduces the main headline row to every digit printed,
 which is the check that the variant code path and the main code path are the
 same code. The null does not depend on K, on the covariance structure, on the
-feature set, or — from `outputs/tables/timing_results_blocksize.csv` — on the
-bootstrap's block size, over which `p_one_sided` moves 0.011 across a factor
-of four.
+feature set, or, from `outputs/tables/timing_results_blocksize.csv`, on the
+bootstrap's block size, over which `p_one_sided` moves 0.011 across a factor of
+four.
 
 Fragility, `outputs/tables/robustness/fragility_summary.csv`:
 
@@ -338,18 +377,18 @@ Fragility, `outputs/tables/robustness/fragility_summary.csv`:
 umd_0_2_sharpe_diff   -1.024094 -1.156142 -0.822955             0          0.000000      -1.209043       197
 ```
 
-**One month of 257 flips the headline's sign.** Removing 2026-07-31 — the last
-month of the sample and the largest timed-minus-static month — takes `diff`
-from −0.027 to +0.013, and trimming the 5% most influential months takes it to
+**One month of 257 flips the headline's sign.** Removing 2026-07-31, the last
+month of the sample and the largest timed-minus-static month, takes `diff` from
+-0.027 to +0.013, and trimming the 5% most influential months takes it to
 +0.044. That trimmed value is a fragility diagnostic and is not a result: it
 carries no interval, it is not a cell of any grid, and it is not what the
 project found. It is reported because a point estimate one observation away
 from changing sign is exactly the sort of number that should not be quoted
-without it. The project found `diff = −0.027`, `p_one_sided = 0.5865`.
+without it. The project found `diff = -0.027`, `p_one_sided = 0.5865`.
 
 The one pairwise difference that excludes zero is not fragile the same way: it
 flips on no single month, and the 5% trim moves it further from zero, to
-−1.209.
+-1.209.
 
 ---
 
@@ -359,7 +398,7 @@ flips on no single month, and the 5% trim moves it further from zero, to
   20 filtered label changes land on a refit date, 45%
   (`outputs/tables/classifier_diagnostics.csv`). Chaining state identity
   (convention 16) reduced this from 15 of 26 under a sort rule, so what remains
-  is re-estimation rather than relabelling — but 45% against a 1-in-12 base
+  is re-estimation rather than relabelling, but 45% against a 1-in-12 base
   rate is the central weakness of the whole exercise.
 - **The anchor feature was too weak to order states on.**
   `outputs/tables/anchor_chain.csv` carries `sort_rule_state` beside the
@@ -374,7 +413,7 @@ flips on no single month, and the 5% trim moves it further from zero, to
   redefined after the fact, and the pre-registered rule that consumed it was
   not re-run.
 - **One state is absorbing at the first refit.** `expected_duration.csv` has
-  `inf` for 2004-12-31 state 0 — a self-transition probability of exactly 1 on
+  `inf` for 2004-12-31 state 0, a self-transition probability of exactly 1 on
   168 training rows. Reported, not clipped.
 - **K = 5 cannot complete the expanding protocol.**
   `outputs/tables/robustness/k_variant_outcomes.csv`:
@@ -400,11 +439,11 @@ flips on no single month, and the 5% trim moves it further from zero, to
   variant whose `sharpe_static` differs, because its window starts at its own
   2009-12-31 first refit (197 months against 257).
 - **The non-primary feature set changes nothing.** Step 6.6's rerun is the
-  `nolevel` row of `robustness_summary.csv` above: `diff` −0.001413,
-  `p_one_sided` 0.5125, beside the main run's −0.027000 and 0.5865. Both are
+  `nolevel` row of `robustness_summary.csv` above: `diff` -0.001413,
+  `p_one_sided` 0.5125, beside the main run's -0.027000 and 0.5865. Both are
   the same answer.
 - **One decision date is dropped.** `model_input` drops 2026-02-28 because
-  `cpi_m3` is NaN in the as-of-2026-02-28 vintage — October 2025 CPI was never
+  `cpi_m3` is NaN in the as-of-2026-02-28 vintage: October 2025 CPI was never
   published in that vintage. The row is reported in `dropped_rows.csv`, not
   patched.
 - **Nothing failed to converge.** Across the 22 main refits, 440 of 440 HMM
@@ -431,8 +470,8 @@ The pre-registered rule that consumed it, quoted from
 > n_changes_on_refit_dates strictly below the d = 8 row's. Otherwise primary
 > stays "core".
 
-The d = 7 row fails the first two conditions, so the third — which it passes,
-7 against 9 — never applies. Primary stays `"core"`, d = 8. The rule was fixed
+The d = 7 row fails the first two conditions, so the third, which it passes, 7
+against 9, never applies. Primary stays `"core"`, d = 8. The rule was fixed
 before any factor return was loaded and was not rewritten once its outcome was
 known.
 
@@ -441,13 +480,13 @@ known.
 ## Limitations
 
 - **Vintage coverage is not perfect.** Each of CPIAUCSL, INDPRO and UNRATE has
-  its latest observation month at t−1 for **438 of 440 decision dates
+  its latest observation month at t-1 for **438 of 440 decision dates
   (99.55%)**; the exceptions are 1996-01-31 and 2025-11-30 for CPI and
-  2025-10-31 and 2025-11-30 for INDPRO and UNRATE — all four are delayed
+  2025-10-31 and 2025-11-30 for INDPRO and UNRATE. All four are delayed
   releases around the 1995-96 and 2025 federal shutdowns
   (`review/section_1.md`, step 1.4 evidence, which prints the as-of rows these
-  come from). No decision date has no vintage at all. The 2026-02-28 drop above is the one case where a missing
-  release removed a row outright.
+  come from). No decision date has no vintage at all. The 2026-02-28 drop above
+  is the one case where a missing release removed a row outright.
 - **Two market series do not span the sample.**
   `outputs/tables/feature_sanity.csv` counts the NaN month-ends per feature:
   `breakeven_chg12` 168, `dgs10_chg12`, `dollar_chg12` and `oil_chg12` 12 each
@@ -466,7 +505,7 @@ known.
   `min_regime_obs` = 24, 72 of 258 months (27.9%) fall back to static weights
   (`outputs/tables/robustness/minobs_fallback.csv`). That is the price of not
   setting a weight from a handful of months in a barely-seen regime, not a
-  defect to tune away — at 12 the fallback share halves to 14.0% and turnover
+  defect to tune away. At 12 the fallback share halves to 14.0% and turnover
   rises, which is more trading rather than more signal.
 - **Sleeve-internal turnover is not modelled** (convention 9). Costs cover only
   the turnover of the sleeve weights, c × ½ Σ|Δw|, which at the headline cell
@@ -480,6 +519,37 @@ known.
 
 ---
 
+## Where the outputs are
+
+Every table and chart in this file is committed, so nothing here needs running
+to be read. 504 files sit under `outputs/`, and these are the ones worth
+opening first.
+
+| file | what it holds |
+|---|---|
+| `outputs/regimes/regime_labels.csv` | **the published series.** 440 monthly rows, one column per label source (rules, HMM filtered, HMM smoothed, GMM filtered) plus the filtered `assigned` flag. This is the file other projects consume. |
+| `outputs/tables/timing_results.csv` | the 72-row timing grid, one row per eta, lag, cost and label source, with the Sharpe difference, its bootstrap interval and `p_one_sided`. The headline row is eta 0.5, lag 1, 20 bp, `hmm_filtered`. |
+| `outputs/tables/classifier_diagnostics.csv` | one row per feature set: label changes, how many land on a refit date, run lengths, crisis detection, filtered against smoothed agreement. |
+| `outputs/tables/conditional_stats_hmm_filtered.csv` | conditional mean, volatility and Sharpe per factor per state, with n, the bootstrap interval, and the excess over the unconditional Sharpe. |
+| `outputs/tables/conditional_differences_hmm_filtered.csv` | the 18 pairwise state differences that answer question 2, each with its own interval. |
+| `outputs/tables/robustness/robustness_summary.csv` | every robustness variant beside the headline: K = 2 to 5, diagonal covariance, the 10-feature run, the non-primary feature set. |
+| `outputs/tables/robustness/fragility_summary.csv` | leave-one-month-out range, sign flips and the 5% trimmed value for the headline and for the one pairwise difference that excludes zero. |
+| `outputs/tables/timing_headline_decomposition.csv` | the headline split into its gross tilt, the cost of trading and the cost of the lag. |
+
+The rest of the tree: `outputs/charts/` the five PNGs above,
+`outputs/regimes/` the filtered, smoothed and GMM probability matrices,
+`outputs/tables/` the per-refit transition matrices, restart logs, state counts,
+anchor chain and parameter drift, and `outputs/tables/robustness/<variant>/`
+one full set per robustness variant.
+
+The audit trail is separate from the results. `review/section_N.md` is the
+evidence file for each build section, `instructions/NN_*.md` is the verbatim
+instruction each session was given with its `.status.md` reply, and
+`decisions/` holds every design decision with the reasoning that settled it.
+Those three folders are kept exactly as written at the time.
+
+---
+
 ## Methods note
 
 **The as-of vintage rule.** Decision date t is the last calendar day of month
@@ -487,7 +557,7 @@ t. Market series take the last non-missing daily observation dated on or before
 t, looking back at most 10 calendar days, else NaN. Revised series (CPIAUCSL,
 INDPRO, UNRATE) take the ALFRED vintage as of t: for each observation month,
 the release with the greatest `realtime_start` ≤ t. **All lags of a revised
-series come from that same as-of-t vintage** — CPI_m and CPI_{m−3} are both
+series come from that same as-of-t vintage**: CPI_m and CPI_{m-3} are both
 read from the vintage as of t, never from the latest vintage and never from a
 mix (convention 12). A decision made at t is executed at the close of the first
 trading day of t+1 and earns month t+1 (lag 0) or t+2 (lag 1). Lags are counted
@@ -506,8 +576,8 @@ above 1.0 z is reported and never acted on.
 
 **The pre-registered feature-set rule.** The choice between the d = 8 and d = 7
 feature sets was fixed as a mechanical rule on
-`outputs/tables/classifier_diagnostics.csv` — quoted in full under "What did
-not work" — after the first section 3 run showed that the d = 8 filter did not
+`outputs/tables/classifier_diagnostics.csv`, quoted in full under "What did not
+work", after the first section 3 run showed that the d = 8 filter did not
 change state through 2008, and **before any factor return was loaded**. It was
 applied by `regime.tables.primary_feature_set_decision` and not rewritten once
 its outcome was known. The set it rejected is rerun in step 6.6.
@@ -519,7 +589,7 @@ accepted by the reviewer (`decisions/section_6_review.md`, Q2).
    (4.67%), not 13 (5.06%). A floor, so "the 5% of months" never removes more
    than 5% of them.
 2. *Pairwise influence is measured by how far a month's removal moves the
-   statistic* (`loo_diff − full_diff`). For the headline there is a timed and a
+   statistic* (`loo_diff - full_diff`). For the headline there is a timed and a
    static return in the same month, so the largest absolute timed-minus-static
    difference is a per-month quantity. For a pairwise state difference the two
    states occupy **disjoint** months and no such pairing exists, so the
@@ -531,16 +601,23 @@ randomness. Two consecutive `python -m regime.run` invocations on one machine
 write byte-identical files under `outputs/` except
 `outputs/tables/runtime.csv`, which is appended once per section per run by
 design; the comparison table is in `review/section_7.md`. That is a
-same-machine property — floating-point output moves at the 1e-12 level across
-Python, BLAS and library versions — and is not a claim that a different
+same-machine property, since floating-point output moves at the 1e-12 level
+across Python, BLAS and library versions, and is not a claim that a different
 environment produces the same bytes.
 
 **Verified independently.** The reviewer took a clean clone with `FRED_API_KEY`
 unset, on a different Python and a different BLAS build, and ran it: `pytest -q`
 gave 132 passed, and `python -m regime.run` completed end to end, writing all
 five charts and every table. The K = 5 robustness variant was recorded there as
-`status = singular_covariance` rather than being fatal — it raised a different
+`status = singular_covariance` rather than being fatal: it raised a different
 exception on that stack, which is the case convention 17 and the addendum to
 `decisions/OPEN.md` item 1 describe. The headline row and
 `outputs/tables/robustness/fragility_summary.csv` matched the values committed
 here at every printed digit.
+
+---
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). The data redistributed under `data/raw/` stays
+under the terms of its original providers, named at the top of this file.

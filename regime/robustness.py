@@ -55,7 +55,7 @@ def _aligned(timed: pd.Series, static: pd.Series) -> tuple[np.ndarray, np.ndarra
 
 
 def sharpe_difference(timed: np.ndarray, static: np.ndarray, cfg: Config) -> float:
-    """``sharpe(timed) − sharpe(static)`` on two aligned arrays, the grid's own arithmetic."""
+    """``sharpe(timed) - sharpe(static)`` on two aligned arrays, the grid's own arithmetic."""
     return annualised_sharpe(timed, cfg.features_ddof) - annualised_sharpe(static, cfg.features_ddof)
 
 
@@ -114,7 +114,7 @@ def _drop_largest(values: np.ndarray, index: pd.DatetimeIndex, count: int) -> np
 
 def trimmed_diff(timed: pd.Series, static: pd.Series, trim: float = DEFAULT_TRIM,
                  cfg: Config | None = None) -> float:
-    """The ``diff`` after removing the ``trim`` share of months with the largest |timed − static|.
+    """The ``diff`` after removing the ``trim`` share of months with the largest |timed - static|.
 
     The months are removed from **both** series so they stay aligned and the
     two Sharpes are still computed over one common sample. ``cfg`` supplies
@@ -145,8 +145,8 @@ def pairwise_months(labels: pd.DataFrame, factors: pd.DataFrame, factor: str,
     """The assigned out-of-sample months in either state, with that factor's t+1 return.
 
     Columns ``state`` and ``ret``, indexed by the decision date. The same
-    selection ``conditional_stats`` makes — assigned rows only, on
-    ``join_next_return``'s window — restricted to the two states of the pair.
+    selection ``conditional_stats`` makes, assigned rows only, on
+    ``join_next_return``'s window, restricted to the two states of the pair.
     """
     joined = join_next_return(labels, factors, cfg)
     present = states_of(joined)
@@ -161,7 +161,7 @@ def pairwise_months(labels: pd.DataFrame, factors: pd.DataFrame, factor: str,
 
 def _pair_difference(state: np.ndarray, ret: np.ndarray, state_a: int, state_b: int,
                      cfg: Config) -> float:
-    """``sharpe(state_b) − sharpe(state_a)``: the sign convention of ``conditional_differences``."""
+    """``sharpe(state_b) - sharpe(state_a)``: the sign convention of ``conditional_differences``."""
     return (
         annualised_sharpe(ret[state == state_b], cfg.features_ddof)
         - annualised_sharpe(ret[state == state_a], cfg.features_ddof)
@@ -172,8 +172,8 @@ def leave_one_month_out_pairwise(labels: pd.DataFrame, factors: pd.DataFrame, fa
                                  state_a: int, state_b: int, cfg: Config) -> pd.DataFrame:
     """The same two statistics for a pairwise state difference of the conditional Sharpe.
 
-    One row per month belonging to either state — the months the difference is
-    computed from — carrying the difference recomputed with that month
+    One row per month belonging to either state, the months the difference is
+    computed from, carrying the difference recomputed with that month
     dropped, and whether that flips its sign.
 
     The trimmed version is the one place this cannot copy the headline's
@@ -181,7 +181,7 @@ def leave_one_month_out_pairwise(labels: pd.DataFrame, factors: pd.DataFrame, fa
     *same* month and "the largest timed-minus-static difference" is a per-month
     quantity. Here the two states occupy disjoint months and no such pairing
     exists, so the influence of a month is taken to be how far its removal
-    moves the statistic, ``loo_diff − full_diff`` — which is what the
+    moves the statistic, ``loo_diff - full_diff``, which is what the
     leave-one-out column already measures. ``trimmed_pairwise_diff`` drops the
     5% of months with the largest absolute influence, from whichever state they
     fall in.
@@ -205,7 +205,7 @@ def trimmed_pairwise_diff(labels: pd.DataFrame, factors: pd.DataFrame, factor: s
                           trim: float = DEFAULT_TRIM) -> float:
     """The pairwise difference after dropping the ``trim`` share of most influential months.
 
-    Influence is ``|loo_diff − full_diff|``; see ``leave_one_month_out_pairwise``
+    Influence is ``|loo_diff - full_diff|``; see ``leave_one_month_out_pairwise``
     for why it is not the headline's definition.
     """
     months = pairwise_months(labels, factors, factor, state_a, state_b, cfg)

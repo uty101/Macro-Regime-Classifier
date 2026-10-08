@@ -24,7 +24,7 @@ def test_config_keys_round_trip() -> None:
     only_in_toml = sorted(toml_keys - field_names)
     only_in_config = sorted(field_names - toml_keys)
     assert toml_keys == field_names, (
-        f"symmetric difference — only in config.toml: {only_in_toml}; "
+        f"symmetric difference, only in config.toml: {only_in_toml}; "
         f"only in Config: {only_in_config}"
     )
 

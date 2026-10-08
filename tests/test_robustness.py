@@ -130,7 +130,7 @@ def test_robustness_cfg_overrides_are_applied_last() -> None:
 def test_k_variant_outcomes_cover_every_k_in_the_grid() -> None:
     """Every K of ``hmm.k_grid`` is accounted for: completed, or named with its reason.
 
-    K = 5 does not complete — its fitted covariance is rank-deficient at the
+    K = 5 does not complete, its fitted covariance is rank-deficient at the
     2006-12-31 refit and ``forward_filter`` refuses it (``decisions/OPEN.md``
     item 1). That is recorded as an outcome rather than swallowed, and this
     test is what stops a K disappearing from step 6.1 silently.

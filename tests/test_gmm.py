@@ -50,7 +50,7 @@ def test_gmm_probability_is_predict_proba_under_params_in_force(tmp_path) -> Non
     # Refit every refit date up to the one that governs t, chaining exactly as
     # run_expanding_gmm does, then score one row. A mixture has no transition
     # matrix, so the probability at t must be that one row's predict_proba and
-    # nothing else — no history, no carry-over.
+    # nothing else, no history, no carry-over.
     D, t = z.index[47], z.index[50]
     assert probs.loc[t, "refit_date"] == D
 

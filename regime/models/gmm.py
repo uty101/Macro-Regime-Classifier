@@ -2,7 +2,7 @@
 
 The comparison model. A mixture has no transition matrix, so its probability
 at t depends only on the features at t: it is the same expanding refit
-protocol as the HMM with the persistence removed. That is the point — the
+protocol as the HMM with the persistence removed. That is the point, the
 difference between the two says how much of the HMM's labelling comes from the
 Markov structure rather than from where the month sits in feature space. The
 "filtered" probability here is ``predict_proba`` of the single row t, which

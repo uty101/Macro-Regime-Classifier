@@ -5,8 +5,7 @@ posterior P(state_t | y_1..y_T), which at every row but the last uses
 observations after t (convention 6). The whole point of the expanding protocol
 is that the probability at decision date t may use nothing dated after t, so
 the filter is written here and validated against hmmlearn twice: the
-log-likelihood against ``model.score`` (the forward pass alone determines it),
-and the final row against ``model.predict_proba``, where filtered and smoothed
+log-likelihood against ``model.score`` (the forward pass alone determines it), and the final row against ``model.predict_proba``, where filtered and smoothed
 coincide because there is nothing after T to condition on.
 
 The recursion is scaled, not log-space: at each row the unnormalised weights
@@ -39,7 +38,7 @@ def forward_filter(
     """Scaled forward recursion.
 
     Returns ``(alpha, loglik)``: ``alpha`` is (T, K) with ``alpha[t, k] =
-    P(state_t = k | y_0..y_t)`` — filtered, never smoothed — and ``loglik`` is
+    P(state_t = k | y_0..y_t)``, filtered, never smoothed, and ``loglik`` is
     ``log P(y_0..y_{T-1})`` under the same parameters. Row 0 predicts from
     ``startprob``; every later row predicts from ``alpha[t-1] @ transmat``.
     ``covars`` is (K, d, d).

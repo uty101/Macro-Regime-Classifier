@@ -15,7 +15,7 @@ from regime.config import load_config
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 # The decomposition table shares the first six column names, so the header is
-# matched on ``p_one_sided`` too — that column exists only in timing_results.csv.
+# matched on ``p_one_sided`` too, that column exists only in timing_results.csv.
 HEADER = "eta  lag  cost_bp       source  sharpe_static  sharpe_timed"
 HEADER_ONLY_IN_TIMING_RESULTS = "p_one_sided"
 
@@ -89,10 +89,18 @@ def test_readme_headline_numbers_match_outputs() -> None:
 def test_readme_states_the_null_before_the_questions() -> None:
     """The null is in the first paragraph, ahead of any of the four questions."""
     text = _text()
-    first_paragraph = text.split("\n", 1)[1].strip().split("\n\n")[0]
+    body = text.split("\n", 1)[1].strip()
+    # The badge block sits between the title and the prose and is not a
+    # paragraph, so it is skipped: the guarantee is about the first thing a
+    # reader actually reads.
+    paragraphs = [
+        block for block in body.split("\n\n")
+        if not all(line.startswith("[![") for line in block.strip().split("\n"))
+    ]
+    first_paragraph = paragraphs[0]
 
     assert "null" in first_paragraph.lower()
-    assert "−0.027" in first_paragraph or "-0.027" in first_paragraph
+    assert "-0.027" in first_paragraph or "-0.027" in first_paragraph
     assert "refit" in first_paragraph
     assert text.index("The result is a null") < text.index("## The four questions")
 

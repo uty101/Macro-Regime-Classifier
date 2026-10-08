@@ -1,4 +1,4 @@
-# Decision — the primary feature set
+# Decision: the primary feature set
 
 **Outcome: `features.primary = "core"` (d = 8, `dgs10_level` included).** Applied
 mechanically by `regime.tables.primary_feature_set_decision` to
@@ -48,11 +48,11 @@ are still on the record:
 
 - **Neither set detects 2008 under this test.** `detects_2008` is `False` for
   d = 8 as well: the filtered label at 2008-11-30 is the same as at
-  2008-06-30. The d = 8 filter does move, but a month later — at 2008-12-31,
+  2008-06-30. The d = 8 filter does move, but a month later, at 2008-12-31,
   which is a refit date. This is the observation that prompted the revision and
   it survives it.
 - **9 of d = 8's 20 label changes still land exactly on a refit date** (45%).
-  Chaining improved this — the sorted run had 15 of 26, or 58% — but did not
+  Chaining improved this, the sorted run had 15 of 26, or 58%, but did not
   remove it.
 
 The d = 7 run is kept in full under `outputs/regimes/robustness/nolevel/` and

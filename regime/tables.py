@@ -57,7 +57,7 @@ def write_hmm_tables(params: list, feature_names: list[str], cfg: Config) -> Non
     """Per-refit transition matrices, ``expected_duration.csv`` and ``param_drift.csv``.
 
     All three are written from anchored parameters, so state k is the same
-    slot in every row — which is what makes ``param_drift.csv`` readable as
+    slot in every row, which is what makes ``param_drift.csv`` readable as
     drift rather than as relabelling. Under chained numbering (convention 16)
     that slot follows the nearest state from refit to refit; how far it had to
     reach each year is ``matched_distance`` in ``anchor_chain.csv``.
@@ -227,8 +227,8 @@ def write_regime_labels(rules, hmm_filt, hmm_smooth, gmm_filt, cfg: Config) -> p
     **whole** decision-date index and not over the out-of-sample window: a
     consumer asking what the regime was in 1997 gets an empty cell rather than
     no row, and can tell the two apart. A label is empty wherever its source
-    has none — the filtered series begins at the first refit, the rules and
-    smoothed series at ``features_from`` — and ``hmm_filtered_assigned`` is
+    has none, the filtered series begins at the first refit, the rules and
+    smoothed series at ``features_from``, and ``hmm_filtered_assigned`` is
     False on every date the filtered label is empty.
 
     Four arguments, one per label source, each a ``label``/``assigned`` frame:
@@ -265,9 +265,9 @@ def write_regime_labels(rules, hmm_filt, hmm_smooth, gmm_filt, cfg: Config) -> p
 
 
 # The tables the kickoff's section 8 names, with the columns each must carry.
-# Section 8 asks for two tables — "transition matrix, expected durations, BIC
+# Section 8 asks for two tables, "transition matrix, expected durations, BIC
 # by K" and "timed minus static Sharpe for each eta, with and without lag,
-# with bootstrap p-values" — and section 9 asks for the regime series as a
+# with bootstrap p-values", and section 9 asks for the regime series as a
 # published CSV. The transition matrices are one file per refit date and are
 # checked by glob, because their count is the number of refits and their
 # columns are ``to_0`` to ``to_{K-1}``.

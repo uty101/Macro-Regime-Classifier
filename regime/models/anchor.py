@@ -1,15 +1,14 @@
 """State identity across refits: sort the first fit, chain every later one (convention 16).
 
 An HMM's state labels are arbitrary: refit the model a year later and the
-state that was 0 can come back as 2. Nothing downstream would notice — the
+state that was 0 can come back as 2. Nothing downstream would notice, the
 conditional statistics would silently average two different regimes together.
 
 The first section 3 run showed that sorting alone does not fix this. Ordering
-by ascending mean ``dgs10_chg12`` needs that feature to separate the states,
-and it does not: the anchored state means span only -0.15 to +0.5 z, so the
+by ascending mean ``dgs10_chg12`` needs that feature to separate the states, and it does not: the anchored state means span only -0.15 to +0.5 z, so the
 sort was ordering noise, and the Hungarian check disagreed with the previous
 refit at 13 of 21 refits. 15 of the 26 filtered label changes from 2005 landed
-exactly on a refit date — the classifier was relabelling, not detecting.
+exactly on a refit date, the classifier was relabelling, not detecting.
 
 So the ordering rule is now two rules. The **first** refit is sorted, by
 ``anchor_permutation``, which fixes an origin for the numbering and nothing
@@ -82,8 +81,8 @@ def chain_permutation(prev_means: np.ndarray, new_means: np.ndarray) -> tuple[np
     so no further tie-break is applied.
 
     A large ``distances[j]`` means state j moved a long way between refits. It
-    is reported, never acted on: the alternative — refusing the match and
-    falling back to a sort — is what the first section 3 run showed does not
+    is reported, never acted on: the alternative, refusing the match and
+    falling back to a sort, is what the first section 3 run showed does not
     work.
     """
     cost = np.linalg.norm(

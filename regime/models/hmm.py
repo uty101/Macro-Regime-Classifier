@@ -237,7 +237,7 @@ def covars_for_setter(covars: np.ndarray, covariance_type: str) -> np.ndarray:
     """Full-shaped (K, d, d) covariances in the shape hmmlearn's ``covars_`` *setter* wants.
 
     hmmlearn's ``covars_`` getter and setter are not inverses. The getter
-    returns (K, d, d) for every covariance type — which is why ``HMMParams``
+    returns (K, d, d) for every covariance type, which is why ``HMMParams``
     can hold one shape, and why ``forward_filter`` and the anchoring need no
     knowledge of the covariance type at all. The setter validates against the
     type's *internal* shape and rejects (K, d, d) for ``"diag"``, which is
@@ -324,7 +324,7 @@ def run_expanding_hmm(
     ``[features_from, D]`` and anchored. Its parameters are in force for
     ``D <= t < next D`` (convention 4). The probability at t is the last row of
     a fresh ``forward_filter`` over ``[features_from, t]`` under those
-    parameters (convention 5) — not a state carried across the boundary, and
+    parameters (convention 5), not a state carried across the boundary, and
     never ``predict_proba``, which would use rows after t.
 
     State numbering follows convention 16: the first refit is sorted by
@@ -417,7 +417,7 @@ def run_smoothed_hmm(
     """One fit on the whole sample, smoothed over the whole sample: the hindsight benchmark.
 
     This is what the regimes look like to someone who already knows how the
-    sample ended — one fit on ``[features_from, sample_end]`` and
+    sample ended, one fit on ``[features_from, sample_end]`` and
     ``predict_proba`` over the full sequence, so every row uses every other
     row. It is deliberate lookahead and exists only to bound what perfect
     regime knowledge would have been worth. Nothing in the timed strategy may

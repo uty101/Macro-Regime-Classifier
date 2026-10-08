@@ -1,4 +1,4 @@
-# Decision — the reviewer's answers to the section 5 questions
+# Decision: the reviewer's answers to the section 5 questions
 
 The three questions are those in `instructions/05_section_5.status.md`,
 "Questions and blockers for the reviewer". The reviewer answered them in the
@@ -9,7 +9,7 @@ them.
 Two of the three change `PLAN.md`. Neither changes a convention, a
 `config.toml` value, or any output section 1 to 5 has already produced.
 
-## Q1 — should the README state the null in its first paragraph?
+## Q1: should the README state the null in its first paragraph?
 
 **Yes.**
 
@@ -25,14 +25,14 @@ Q1 answer, which fixed the *framing* around the null but left the null to
 emerge as the four questions were answered in turn. A reader who stops after
 the first paragraph must already have the result.
 
-## Q2 — `min_regime_obs` at 24 holds 28% of the window in fallback
+## Q2: `min_regime_obs` at 24 holds 28% of the window in fallback
 
 **Accepted as a property of the design, with a reporting requirement.**
 
 The 24-month minimum is not a defect to be tuned away. It is what stops a
 weight being set from a handful of months in a regime the strategy has barely
-seen, and the cost of that protection — the strategy being definitionally the
-comparator in those months — is the price of it.
+seen, and the cost of that protection, the strategy being definitionally the
+comparator in those months, is the price of it.
 
 What is added is the reporting that lets a reader tell the two apart. `PLAN.md`
 step 6.4 also reports, **per `min_regime_obs` setting**, beside the `diff`:
@@ -46,14 +46,14 @@ move the `diff` in one direction or the other mechanically; with the fallback
 share and the deviation printed next to it, that claim is checkable instead of
 asserted.
 
-## Q3 — nothing in the plan catches leave-one-month-out fragility
+## Q3: nothing in the plan catches leave-one-month-out fragility
 
 **Yes, and it becomes step 6.7.**
 
 The headline `diff` flips sign when 2026-07-31 is dropped from 257 months, and
 section 4's one pairwise difference that excludes zero leans on 2009-03. There
 was no leave-one-month-out or trimmed statistic anywhere in `PLAN.md`, and step
-6.5 sweeps only `block_size`. A new **step 6.7 — fragility of the headline
+6.5 sweeps only `block_size`. A new **step 6.7, fragility of the headline
 statistics** is added to `PLAN.md`, building `regime/robustness.py`'s
 `leave_one_month_out`, `trimmed_diff` and `leave_one_month_out_pairwise`, and
 applying both statistics to the headline timing cell and to the one section 4

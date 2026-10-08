@@ -1,4 +1,4 @@
-# CLAUDE.md — Macro Regime Classifier and Factor Timing
+# CLAUDE.md: Macro Regime Classifier and Factor Timing
 
 Sections 0 and 3 of `REGIME_KICKOFF_v2.md`, verbatim except rule 10, which carries the session 0 review revision (60-minute threshold for the long steps), and rule 11, added in the section 3 revision (`instructions/03b_section_3_revision.md`). Instruction messages from session 0 to section 3 predate rule 11 and were not saved; `instructions/00_history.md` records that and lists the commits. The full build plan is `PLAN.md`; every parameter is in `config.toml`; resolved conventions are in `docs/CONVENTIONS_RESOLVED.md`.
 
@@ -27,7 +27,7 @@ Decision date t is the last calendar day of month t. The decision made at t is e
 Information set at t:
 
 - Market series (DGS10, DGS2, DTWEXBGS, DTWEXM, DCOILWTICO, VIXCLS, T10YIE): the last non-missing daily observation dated on or before t, looking back at most 10 calendar days. If no observation exists within 10 days the month is NaN and reported. These series are not revised.
-- Revised macro series (CPIAUCSL, INDPRO, UNRATE): the ALFRED vintage as of t. For each observation month m, the value used is the one from the release with the greatest `realtime_start` that is ≤ t. All lags of a revised series at decision date t (m−3, m−12) come from that same as-of-t vintage, never from the latest vintage. In practice CPI and INDPRO at t refer to month t−1 and UNRATE to month t−1.
+- Revised macro series (CPIAUCSL, INDPRO, UNRATE): the ALFRED vintage as of t. For each observation month m, the value used is the one from the release with the greatest `realtime_start` that is ≤ t. All lags of a revised series at decision date t (m-3, m-12) come from that same as-of-t vintage, never from the latest vintage. In practice CPI and INDPRO at t refer to month t-1 and UNRATE to month t-1.
 - Factor returns: months ≤ t.
 
 Lags are in decision-date index units: "12 months ago" means 12 rows earlier in the decision-date index, not calendar arithmetic on days.
