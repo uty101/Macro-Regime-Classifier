@@ -27,3 +27,8 @@ include = ["regime*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# tests/test_gmm.py imports a helper from tests/test_hmm.py, which needs the
+# repo root on sys.path. "python -m pytest" adds the working directory and so
+# hides this; a bare "pytest" does not, which is the command the README gives
+# and the one CI runs.
+pythonpath = ["."]
